@@ -1,0 +1,594 @@
+# Enimate 铅笔工具设计与开发计划
+
+> 本文档定义铅笔工具（自由绘制）的完整设计，作为 MVP 后的扩展功能。
+
+## 一、为什么 MVP 不包含铅笔工具
+
+| 原因 | 说明 |
+|------|------|
+| **位图 vs 矢量** | 铅笔工具生成的是位图画笔轨迹，而非矢量路径，需要独立的位图渲染系统 |
+| **笔刷系统复杂** | 需要设计多种笔刷类型（圆形、方形、纹理笔刷）、笔刷引擎、笔刷预设管理 |
+| **压感支持** | 需要集成数位板 API（Wacom、Huion 等），处理压感数据映射 |
+| **笔触平滑** | 自由绘制的点序列需要平滑处理，涉及贝塞尔拟合或 Lagrange 插值 |
+| **性能优化** | 高频绘制事件、实时渲染、大画布性能 |
+
+---
+
+## 二、设计目标
+
+| 目标 | 说明 |
+|------|------|
+| 自然绘制体验 | 响应灵敏、笔触流畅 |
+| 压感支持 | 支持常见数位板（Wacom、Huion、XP-Pen） |
+| 笔刷可扩展 | 支持自定义笔刷、笔刷预设导入 |
+| 与矢量图层共存 | 位图层和矢量层可混合使用 |
+
+---
+
+## 三、架构设计
+
+### 3.1 系统分层
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        应用层 (Application)                       │
+│  铅笔工具 UI │ 笔刷选择器 │ 笔刷设置面板                          │
+├─────────────────────────────────────────────────────────────────┤
+│                        工具层 (Tool Layer)                        │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                    PencilTool                             │  │
+│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐ │  │
+│  │  │ StrokeEngine│ │ BrushEngine │ │ SmoothingFilter     │ │  │
+│  │  └─────────────┘ └─────────────┘ └─────────────────────┘ │  │
+│  └───────────────────────────────────────────────────────────┘  │
+├─────────────────────────────────────────────────────────────────┤
+│                   位图层系统 (Bitmap Layer System)                │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │  BitmapLayer (继承自 Layer)                               │  │
+│  │  ├── RasterData: 像素数据                                 │  │
+│  │  ├── BrushStrokes: 笔触记录（可撤销）                       │  │
+│  │  └── BlendMode: 混合模式                                  │  │
+│  └───────────────────────────────────────────────────────────┘  │
+├─────────────────────────────────────────────────────────────────┤
+│                        渲染层 (Rendering Layer)                   │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │  SkiaBitmapCanvas                                         │  │
+│  │  ├── draw_stroke(): 绘制笔触                               │  │
+│  │  ├── compose(): 合成到最终图像                              │  │
+│  │  └── save_to_png(): 导出                                  │  │
+│  └───────────────────────────────────────────────────────────┘  │
+├─────────────────────────────────────────────────────────────────┤
+│                        输入层 (Input Layer)                       │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │  InputManager                                             │  │
+│  │  ├── MouseInput: 鼠标事件                                  │  │
+│  │  ├── TabletInput: 数位板事件（压感、倾斜）                    │  │
+│  │  └── EventQueue: 输入事件队列                               │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 3.2 数据流
+
+```
+输入事件（鼠标/数位板）
+       │
+       ▼
+┌─────────────────┐
+│  InputManager   │ → 规范化为 StrokePoint
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ SmoothingFilter │ → 平滑处理，生成流畅曲线
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  BrushEngine    │ → 根据笔刷设置生成笔触形状
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  StrokeEngine   │ → 渲染笔触到位图
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  BitmapLayer    │ → 存储笔触记录，支持撤销
+└─────────────────┘
+```
+
+---
+
+## 四、核心组件设计
+
+### 4.1 笔刷引擎 (BrushEngine)
+
+#### 4.1.1 笔刷类型
+
+```moonbit
+/// 笔刷类型
+type BrushType =
+  | RoundBrush      // 圆形笔刷（最常用）
+  | SquareBrush     // 方形笔刷
+  | TextureBrush    // 纹理笔刷（使用纹理图案）
+  | Airbrush        // 喷枪（软边缘）
+  | CalligraphyBrush // 书法笔（倾斜敏感）
+```
+
+#### 4.1.2 笔刷属性
+
+```moonbit
+/// 笔刷设置
+type BrushSettings = {
+  // 基础属性
+  size: Double,              // 基础大小（像素）
+  opacity: Double,           // 不透明度 (0.0 - 1.0)
+  hardness: Double,          // 硬度 (0.0 = 软边缘, 1.0 = 硬边缘)
+  
+  // 压感响应
+  size_pressure: Double,     // 大小压感系数 (0.0 = 无响应, 1.0 = 完全响应)
+  opacity_pressure: Double,  // 不透明度压感系数
+  
+  // 动态属性
+  spacing: Double,           // 笔触间距（像素）
+  angle: Double,             // 笔刷角度（度）
+  angle_jitter: Double,      // 角度抖动
+  size_jitter: Double,       // 大小抖动
+  
+  // 混合模式
+  blend_mode: BlendMode,
+}
+
+/// 混合模式
+type BlendMode =
+  | Normal          // 正常
+  | Multiply        // 正片叠底
+  | Screen          // 滤色
+  | Overlay         // 叠加
+  | Darken          // 变暗
+  | Lighten         // 变亮
+```
+
+#### 4.1.3 笔刷渲染
+
+```moonbit
+/// 笔刷引擎
+type BrushEngine {
+  priv settings: BrushSettings
+  priv brush_stamp: BrushStamp  // 预渲染的笔刷图章
+}
+
+impl BrushEngine {
+  /// 创建笔刷引擎
+  fn new(settings: BrushSettings) -> BrushEngine {
+    let stamp = generate_brush_stamp(settings)
+    { settings, brush_stamp: stamp }
+  }
+  
+  /// 更新设置
+  fn update_settings(self: BrushEngine, settings: BrushSettings) -> Unit {
+    self.settings = settings
+    self.brush_stamp = generate_brush_stamp(settings)
+  }
+  
+  /// 渲染单个笔触点
+  fn render_dab(
+    self: BrushEngine,
+    canvas: BitmapCanvas,
+    point: StrokePoint,
+  ) -> Unit {
+    // 根据压感计算实际大小和不透明度
+    let actual_size = self.settings.size * 
+      (1.0 + self.settings.size_pressure * (point.pressure - 0.5) * 2.0)
+    let actual_opacity = self.settings.opacity * 
+      (1.0 + self.settings.opacity_pressure * (point.pressure - 0.5) * 2.0)
+    
+    // 渲染笔刷图章
+    canvas.draw_stamp(
+      self.brush_stamp,
+      point.x,
+      point.y,
+      actual_size,
+      actual_opacity,
+      self.settings.blend_mode,
+    )
+  }
+}
+```
+
+### 4.2 笔触平滑 (SmoothingFilter)
+
+#### 4.2.1 为什么需要平滑
+
+自由绘制时，鼠标/数位板的采样点是离散的，直接连接会产生锯齿状线条。平滑算法可以：
+- 减少抖动
+- 生成流畅曲线
+- 模拟真实笔触
+
+#### 4.2.2 平滑算法
+
+```moonbit
+/// 笔触点
+type StrokePoint = {
+  x: Double,
+  y: Double,
+  pressure: Double,   // 压感 (0.0 - 1.0)
+  tilt_x: Double,     // 倾斜 X（数位板）
+  tilt_y: Double,     // 倾斜 Y（数位板）
+  timestamp: Double,  // 时间戳
+}
+
+/// 平滑滤波器
+type SmoothingFilter {
+  priv buffer: Array[StrokePoint]
+  priv buffer_size: Int
+  priv strength: Double  // 平滑强度 (0.0 - 1.0)
+}
+
+impl SmoothingFilter {
+  /// 添加原始点，返回平滑后的点
+  fn add_point(self: SmoothingFilter, raw: StrokePoint) -> Option[StrokePoint] {
+    self.buffer.push(raw)
+    if self.buffer.length() < 3 {
+      return None  // 点数不足
+    }
+    
+    // 加权移动平均
+    let smoothed = weighted_moving_average(self.buffer, self.strength)
+    Some(smoothed)
+  }
+  
+  /// 贝塞尔拟合（更高级的平滑）
+  fn fit_bezier(self: SmoothingFilter, points: Array[StrokePoint]) -> Array[BezierSegment] {
+    // 使用 Schneider 算法拟合贝塞尔曲线
+    // 参考: https://pomax.github.io/bezierinfo/
+    fit_curve_to_points(points, error_tolerance=1.0)
+  }
+}
+```
+
+#### 4.2.3 平滑策略对比
+
+| 算法 | 优点 | 缺点 | 适用场景 |
+|------|------|------|----------|
+| 简单平均 | 实现简单、速度快 | 延迟明显 | 基础实现 |
+| 加权移动平均 | 平滑效果好 | 需要调节权重 | 通用场景 |
+| 贝塞尔拟合 | 曲线最流畅 | 计算复杂 | 精细绘制 |
+| Kalman 滤波 | 可预测、延迟低 | 需要调参 | 快速绘制 |
+
+### 4.3 压感输入 (TabletInput)
+
+#### 4.3.1 数位板 API 集成
+
+```
+平台支持：
+
+Linux:
+└── libinput + evdev（底层）
+└── GTK/GDK Tablet API（高层）
+
+Windows:
+└── WinTab API（专业数位板）
+└── Windows Ink（现代 API）
+
+macOS:
+└── AppKit NSTabletPointEvent
+```
+
+#### 4.3.2 统一输入接口
+
+```moonbit
+/// 输入事件（统一接口）
+type InputEvent =
+  | PointerMove(PointerData)
+  | PointerDown(PointerData)
+  | PointerUp(PointerData)
+
+/// 指针数据
+type PointerData = {
+  x: Double,
+  y: Double,
+  pressure: Double,      // 0.0 - 1.0（鼠标默认 0.5）
+  tilt: Option[(Double, Double)],  // 倾斜（仅数位板）
+  pointer_type: PointerType,
+  device_id: String,     // 设备标识
+}
+
+type PointerType =
+  | Mouse
+  | Pen
+  | Eraser
+  | Touch
+```
+
+#### 4.3.3 GLFW 数位板支持
+
+```c
+// GLFW 默认不直接支持压感，需要扩展
+// 方案 1: 使用 GLFW 的 raw input + 自行解析
+// 方案 2: 平台特定代码
+
+// Linux 示例：监听 libinput 事件
+#ifdef __linux__
+#include <libinput.h>
+
+void init_tablet_input() {
+  struct libinput *li;
+  struct libinput_event *event;
+  
+  // 初始化 libinput
+  li = libinput_udev_create_context(...);
+  
+  // 监听设备事件
+  while ((event = libinput_get_event(li)) != NULL) {
+    if (libinput_event_get_type(event) == LIBINPUT_EVENT_TABLET_TOOL_AXIS) {
+      struct libinput_event_tablet_tool *t = 
+        libinput_event_get_tablet_tool_event(event);
+      
+      double pressure = libinput_event_tablet_tool_get_pressure(t);
+      // 传递给 MoonBit
+    }
+  }
+}
+#endif
+```
+
+### 4.4 位图层系统 (BitmapLayer)
+
+#### 4.4.1 数据结构
+
+```moonbit
+/// 位图层（继承自基础 Layer）
+type BitmapLayer <: Layer = {
+  // 基础属性（继承）
+  id: String,
+  name: String,
+  visible: Bool,
+  locked: Bool,
+  opacity: Double,
+  blend_mode: BlendMode,
+  
+  // 位图特有属性
+  raster: RasterData,        // 像素数据
+  strokes: Array[BrushStroke], // 笔触记录（用于撤销）
+  width: Int,
+  height: Int,
+}
+
+/// 光栅数据
+type RasterData {
+  priv pixels: ByteArray     // RGBA 格式
+  priv width: Int
+  priv height: Int
+}
+
+/// 笔触记录（用于撤销/重做）
+type BrushStroke = {
+  points: Array[StrokePoint],
+  brush_settings: BrushSettings,
+  timestamp: Double,
+}
+```
+
+#### 4.4.2 操作方法
+
+```moonbit
+impl BitmapLayer {
+  /// 创建空位图层
+  fn create(width: Int, height: Int, name: String) -> BitmapLayer {
+    let pixels = ByteArray::new(width * height * 4)  // RGBA
+    // 初始化为透明
+    pixels.fill(0)
+    
+    {
+      id: generate_id(),
+      name,
+      visible: true,
+      locked: false,
+      opacity: 1.0,
+      blend_mode: Normal,
+      raster: { pixels, width, height },
+      strokes: [],
+      width,
+      height,
+    }
+  }
+  
+  /// 绘制笔触
+  fn draw_stroke(
+    self: BitmapLayer,
+    stroke: BrushStroke,
+    engine: BrushEngine,
+  ) -> Unit {
+    // 渲染笔触到光栅
+    for point in stroke.points {
+      engine.render_dab(self.raster, point)
+    }
+    // 记录笔触（用于撤销）
+    self.strokes.push(stroke)
+  }
+  
+  /// 撤销最后笔触
+  fn undo_last_stroke(self: BitmapLayer) -> Bool {
+    if self.strokes.length() == 0 {
+      return false
+    }
+    self.strokes.pop()
+    // 重新渲染所有笔触
+    self.rerender()
+    true
+  }
+  
+  /// 重新渲染（撤销后）
+  fn rerender(self: BitmapLayer) -> Unit {
+    self.raster.clear()
+    for stroke in self.strokes {
+      let engine = BrushEngine::new(stroke.brush_settings)
+      for point in stroke.points {
+        engine.render_dab(self.raster, point)
+      }
+    }
+  }
+  
+  /// 清空图层
+  fn clear(self: BitmapLayer) -> Unit {
+    self.raster.clear()
+    self.strokes = []
+  }
+}
+```
+
+---
+
+## 五、与矢量层的混合
+
+### 5.1 图层类型扩展
+
+```moonbit
+/// 图层类型（扩展原有定义）
+type LayerType =
+  | VectorLayer    // 矢量层（MVP）
+  | BitmapLayer    // 位图层（铅笔工具）
+  | GroupLayer     // 图层组
+
+/// 时间轴帧数据扩展
+type FrameData = {
+  is_keyframe: Bool,
+  shapes: Option[Array[ShapeInstance]],   // 矢量数据
+  bitmap: Option[BitmapLayer],            // 位图数据
+  // 同一帧只能有一种类型
+}
+```
+
+### 5.2 渲染合成
+
+```moonbit
+/// 帧渲染（支持混合图层）
+fn render_frame(
+  timeline: Timeline,
+  frame_index: Int,
+  canvas: SkiaCanvas,
+) -> Unit {
+  // 按图层顺序渲染
+  for layer in timeline.layers {
+    if !layer.visible { continue }
+    
+    match layer {
+      case VectorLayer(v) =>
+        // 渲染矢量图形
+        render_vector_layer(v, frame_index, canvas)
+      case BitmapLayer(b) =>
+        // 渲染位图
+        render_bitmap_layer(b, canvas)
+    }
+    
+    // 应用图层混合
+    canvas.apply_blend(layer.blend_mode, layer.opacity)
+  }
+}
+```
+
+---
+
+## 六、开发计划
+
+### 6.1 阶段划分
+
+```
+阶段一：位图基础（2 周）
+├── BitmapLayer 数据结构
+├── RasterData 封装（Skia Bitmap FFI）
+├── 基础笔刷渲染（圆形、固定大小）
+└── 鼠标输入支持
+
+阶段二：笔刷系统（2 周）
+├── BrushSettings 数据结构
+├── BrushEngine 实现
+├── 笔刷设置 UI
+├── 不透明度/大小动态响应
+
+阶段三：平滑与优化（1 周）
+├── SmoothingFilter 实现
+├── 笔触平滑算法
+├── 性能优化（增量渲染）
+
+阶段四：压感支持（1 周）
+├── Linux libinput 集成
+├── Windows WinTab 集成（可选）
+├── 压感数据映射
+└── 数位板检测与配置
+
+阶段五：高级功能（1 周）
+├── 橡皮擦工具
+├── 纹理笔刷
+├── 笔刷预设保存/加载
+└── 与矢量层混合渲染
+```
+
+### 6.2 文件结构
+
+```
+src/
+├── layer/
+│   ├── bitmap_layer.mbt      # 位图层实现
+│   └── raster_data.mbt       # 光栅数据封装
+├── tool/
+│   ├── pencil.mbt            # 铅笔工具
+│   ├── eraser.mbt            # 橡皮擦
+│   └── brush/
+│       ├── brush_engine.mbt  # 笔刷引擎
+│       ├── brush_settings.mbt
+│       └── brush_presets.mbt
+├── input/
+│   ├── input_manager.mbt     # 输入管理
+│   ├── smoothing.mbt         # 平滑滤波
+│   └── tablet/
+│       ├── tablet_api.mbt    # 数位板接口
+│       └── libinput_ffi.mbt  # Linux FFI
+└── render/
+    └── bitmap_renderer.mbt   # 位图渲染器
+```
+
+### 6.3 依赖关系
+
+```
+铅笔工具依赖：
+├── 位图层系统 ← 独立于矢量系统
+├── Skia Bitmap API ← 已有 FFI 基础
+├── 输入系统 ← 需要扩展压感支持
+└── 撤销系统 ← 复用 MVP 实现
+```
+
+---
+
+## 七、技术难点与解决方案
+
+| 难点 | 解决方案 |
+|------|----------|
+| 高频绘制卡顿 | 增量渲染 + 双缓冲 |
+| 笔触延迟 | 预测算法 + 低延迟输入处理 |
+| 撤销性能 | 笔触缓存 + 增量更新 |
+| 跨平台压感 | 平台抽象层 + 条件编译 |
+| 大画布内存 | 分块渲染 + 按需加载 |
+
+---
+
+## 八、参考资源
+
+**笔刷引擎**：
+- MyPaint 笔刷引擎：https://github.com/mypaint/mypaint-brushes
+- Krita 笔刷系统：https://invent.kde.org/graphics/krita
+
+**平滑算法**：
+- 曲线拟合算法：https://pomax.github.io/bezierinfo/
+- Kalman 滤波器：https://www.kalmanfilter.net/
+
+**压感输入**：
+- libinput 文档：https://wayland.freedesktop.org/libinput/doc/latest/
+- WinTab API：https://developer.wacom.com/
+
+**开源参考**：
+- Pencil2D 铅笔工具：https://github.com/pencil2d/pencil
+- OpenToonz 光栅工具：https://github.com/opentoonz/opentoonz

@@ -738,3 +738,5 @@ enimate/
 | [enimate-development-plan.mdc](./enimate-development-plan.mdc) | MVP 开发计划（本文档） |
 | [enimate-project-format.mdc](./enimate-project-format.mdc) | 工程文件格式设计 |
 | [enimate-ral-design.mdc](./enimate-ral-design.mdc) | 渲染抽象层设计（MVP 后升级） |
+| [enimate-pencil-tool-design.mdc](./enimate-pencil-tool-design.mdc) | 铅笔工具设计（位图绘制，MVP 后扩展） |
+| [enimate-animation-api-design.mdc](./enimate-animation-api-design.mdc) | 动画↔代码/API 双向转换设计 |

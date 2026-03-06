@@ -1,0 +1,640 @@
+# Enimate 动画 ↔ 代码/API 双向转换设计
+
+> 本文档定义动画与代码/API 的双向转换机制，借鉴 Pencil 的 Design ↔ Code 思路。
+> 核心目标：让动画数据模型可被程序化操作，为 AI Agent 生成动画奠定基础。
+
+## 一、双向转换概述
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Animation ↔ Code/API                         │
+│                                                                  │
+│   ┌──────────────┐                    ┌──────────────┐          │
+│   │   动画项目    │  ──── 导出 ────▶  │   输出产物    │          │
+│   │  (.enim)     │                    │              │          │
+│   │              │  ◀─── 导入 ────    │ PNG 序列     │          │
+│   │              │                    │ 视频文件     │          │
+│   │              │                    │ 代码生成     │          │
+│   └──────────────┘                    └──────────────┘          │
+│          │                                                      │
+│          │ API 操作                                             │
+│          ▼                                                      │
+│   ┌──────────────┐                    ┌──────────────┐          │
+│   │   程序化操作  │  ──── 创建 ────▶  │  动画数据    │          │
+│   │              │                    │              │          │
+│   │ MoonBit API  │  ◀─── 查询 ────    │ Document     │          │
+│   │ AI Agent     │                    │ Timeline     │          │
+│   │ 脚本/插件    │                    │ Shapes       │          │
+│   └──────────────┘                    └──────────────┘          │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+| 方向 | 操作 | 说明 |
+|------|------|------|
+| **Animation → Output** | 导出 | PNG 序列帧、视频、代码 |
+| **Output → Animation** | 导入 | 从图片序列创建帧、从 SVG 导入 |
+| **API → Animation** | 创建/编辑 | 程序化创建动画、AI Agent 操作 |
+| **Animation → API** | 查询 | 读取动画数据、分析动画结构 |
+
+---
+
+## 二、Animation → Output（导出）
+
+### 2.1 PNG 序列帧导出
+
+```moonbit
+/// PNG 序列帧导出器
+type PngExporter {
+  output_dir: String
+  filename_pattern: String  // "frame_{:04d}.png"
+}
+
+impl PngExporter {
+  /// 导出指定帧范围
+  fn export_frames(
+    self: PngExporter,
+    doc: Document,
+    start_frame: Int,
+    end_frame: Int,
+  ) -> Result[Unit, String] {
+    for frame_idx in start_frame..end_frame {
+      // 渲染帧
+      let canvas = render_frame(doc, frame_idx)
+      // 生成文件名
+      let filename = self.filename_pattern.format(frame_idx)
+      // 保存 PNG
+      canvas.save_to_png("{self.output_dir}/{filename}")?
+    }
+    Ok(())
+  }
+}
+```
+
+### 2.2 代码生成（未来）
+
+```moonbit
+/// 代码生成器
+type CodeGenerator {
+  target: CodeTarget
+  options: CodeGenOptions
+}
+
+type CodeTarget =
+  | ReactComponent    // React 动画组件
+  | CssAnimation      // CSS 关键帧动画
+  | SvgAnimation      // SVG SMIL 动画
+  | CanvasJs          // Canvas 2D JavaScript
+  | LottieJson        // Lottie JSON 格式
+
+impl CodeGenerator {
+  /// 从动画生成代码
+  fn generate(self: CodeGenerator, doc: Document) -> String {
+    match self.target {
+      case ReactComponent => self.generate_react(doc)
+      case CssAnimation => self.generate_css(doc)
+      case LottieJson => self.generate_lottie(doc)
+      // ...
+    }
+  }
+  
+  /// 生成 React 组件
+  fn generate_react(self: CodeGenerator, doc: Document) -> String {
+    // 将动画数据转换为 React 组件代码
+    // 使用 requestAnimationFrame 或 CSS 动画
+  }
+  
+  /// 生成 Lottie JSON
+  fn generate_lottie(self: CodeGenerator, doc: Document) -> String {
+    // 将 .enim 格式转换为 Lottie 兼容格式
+  }
+}
+```
+
+### 2.3 导出格式对比
+
+| 格式 | 优点 | 缺点 | 适用场景 |
+|------|------|------|----------|
+| PNG 序列 | 通用、质量高 | 文件多、体积大 | 后期合成、GIF 转换 |
+| MP4/WEBM | 单文件、压缩好 | 需要编码器 | 最终交付 |
+| Lottie JSON | 矢量、体积小 | 功能受限 | Web/App 动画 |
+| React 组件 | 可交互、可编程 | 需要运行时 | Web 应用 |
+| CSS 动画 | 原生支持、性能好 | 仅支持简单动画 | Web 动画 |
+
+---
+
+## 三、Output → Animation（导入）
+
+### 3.1 图片序列导入
+
+```moonbit
+/// 图片序列导入器
+type ImageSequenceImporter {}
+
+impl ImageSequenceImporter {
+  /// 从图片序列创建动画
+  fn import(
+    self: ImageSequenceImporter,
+    image_paths: Array[String],
+    fps: Int,
+  ) -> Result[Document, String] {
+    // 创建文档
+    let doc = Document::create(
+      name: "Imported Animation",
+      width: get_image_width(image_paths[0])?,
+      height: get_image_height(image_paths[0])?,
+      fps: fps,
+    )
+    
+    // 为每张图片创建一帧
+    for (idx, path) in image_paths.enumerate() {
+      // 创建图层和帧
+      let layer = doc.timeline.create_layer("Frame \(idx)")
+      let frame = layer.create_keyframe(idx)
+      
+      // 添加图片资源
+      let resource = doc.add_image_resource(path)
+      
+      // 创建图片实例
+      let shape = ShapeInstance::from_image(resource.id)
+      frame.add_shape(shape)
+    }
+    
+    Ok(doc)
+  }
+}
+```
+
+### 3.2 SVG 导入
+
+```moonbit
+/// SVG 导入器
+type SvgImporter {}
+
+impl SvgImporter {
+  /// 解析 SVG 并转换为 Shape
+  fn import(self: SvgImporter, svg_content: String) -> Result[Array[Shape], String] {
+    // 解析 SVG DOM
+    let svg = parse_svg(svg_content)
+    
+    // 转换为 Enimate 图形
+    let shapes = []
+    for element in svg.children {
+      match element.tag {
+        case "rect" => shapes.push(self.convert_rect(element))
+        case "ellipse" => shapes.push(self.convert_ellipse(element))
+        case "path" => shapes.push(self.convert_path(element))
+        case "g" => shapes.push(self.convert_group(element))
+      }
+    }
+    
+    Ok(shapes)
+  }
+}
+```
+
+---
+
+## 四、API → Animation（程序化创建）
+
+### 4.1 核心 API 设计
+
+```moonbit
+/// 动画编辑器 API
+type AnimationAPI {
+  priv doc: Document
+}
+
+impl AnimationAPI {
+  // ========== 文档操作 ==========
+  
+  /// 创建新文档
+  fn create_document(
+    name: String,
+    width: Int,
+    height: Int,
+    fps: Int,
+  ) -> AnimationAPI {
+    let doc = Document::create(name, width, height, fps)
+    { doc }
+  }
+  
+  /// 打开文档
+  fn open_document(path: String) -> Result[AnimationAPI, String] {
+    let doc = load_document(path)?
+    Ok({ doc })
+  }
+  
+  /// 保存文档
+  fn save(self: AnimationAPI, path: String) -> Result[Unit, String] {
+    save_document(self.doc, path)
+  }
+  
+  // ========== 图层操作 ==========
+  
+  /// 创建图层
+  fn create_layer(self: AnimationAPI, name: String) -> String {
+    let layer = self.doc.timeline.create_layer(name)
+    layer.id
+  }
+  
+  /// 删除图层
+  fn delete_layer(self: AnimationAPI, layer_id: String) -> Unit {
+    self.doc.timeline.delete_layer(layer_id)
+  }
+  
+  /// 重命名图层
+  fn rename_layer(self: AnimationAPI, layer_id: String, name: String) -> Unit {
+    self.doc.timeline.get_layer(layer_id).name = name
+  }
+  
+  // ========== 关键帧操作 ==========
+  
+  /// 插入关键帧
+  fn insert_keyframe(
+    self: AnimationAPI,
+    layer_id: String,
+    frame_index: Int,
+  ) -> String {
+    let layer = self.doc.timeline.get_layer(layer_id)
+    let frame = layer.create_keyframe(frame_index)
+    frame.id
+  }
+  
+  /// 删除关键帧
+  fn delete_keyframe(
+    self: AnimationAPI,
+    layer_id: String,
+    frame_index: Int,
+  ) -> Unit {
+    self.doc.timeline.get_layer(layer_id).delete_keyframe(frame_index)
+  }
+  
+  // ========== 图形操作 ==========
+  
+  /// 添加矩形
+  fn add_rectangle(
+    self: AnimationAPI,
+    layer_id: String,
+    frame_index: Int,
+    x: Double, y: Double,
+    width: Double, height: Double,
+    fill: Option[String],
+    stroke: Option[StrokeConfig],
+  ) -> String {
+    let shape = ShapeInstance::rectangle(x, y, width, height)
+    shape.style = Style::from_config(fill, stroke)
+    
+    let frame = self.get_frame(layer_id, frame_index)
+    frame.add_shape(shape)
+    shape.id
+  }
+  
+  /// 添加椭圆
+  fn add_ellipse(
+    self: AnimationAPI,
+    layer_id: String,
+    frame_index: Int,
+    cx: Double, cy: Double,
+    rx: Double, ry: Double,
+    fill: Option[String],
+    stroke: Option[StrokeConfig],
+  ) -> String {
+    let shape = ShapeInstance::ellipse(cx, cy, rx, ry)
+    shape.style = Style::from_config(fill, stroke)
+    
+    let frame = self.get_frame(layer_id, frame_index)
+    frame.add_shape(shape)
+    shape.id
+  }
+  
+  /// 添加贝塞尔路径
+  fn add_path(
+    self: AnimationAPI,
+    layer_id: String,
+    frame_index: Int,
+    path_data: String,  // SVG path d 属性格式
+    fill: Option[String],
+    stroke: Option[StrokeConfig],
+  ) -> String {
+    let shape = ShapeInstance::path(path_data)
+    shape.style = Style::from_config(fill, stroke)
+    
+    let frame = self.get_frame(layer_id, frame_index)
+    frame.add_shape(shape)
+    shape.id
+  }
+  
+  // ========== 变换操作 ==========
+  
+  /// 移动图形
+  fn move_shape(
+    self: AnimationAPI,
+    shape_id: String,
+    dx: Double, dy: Double,
+  ) -> Unit {
+    let shape = self.find_shape(shape_id)
+    shape.transform.translate_x += dx
+    shape.transform.translate_y += dy
+  }
+  
+  /// 缩放图形
+  fn scale_shape(
+    self: AnimationAPI,
+    shape_id: String,
+    sx: Double, sy: Double,
+  ) -> Unit {
+    let shape = self.find_shape(shape_id)
+    shape.transform.scale_x *= sx
+    shape.transform.scale_y *= sy
+  }
+  
+  /// 旋转图形
+  fn rotate_shape(
+    self: AnimationAPI,
+    shape_id: String,
+    angle: Double,  // 弧度
+  ) -> Unit {
+    let shape = self.find_shape(shape_id)
+    shape.transform.rotation += angle
+  }
+  
+  // ========== 样式操作 ==========
+  
+  /// 设置填充颜色
+  fn set_fill_color(
+    self: AnimationAPI,
+    shape_id: String,
+    color: String,  // RGBA 十六进制
+  ) -> Unit {
+    let shape = self.find_shape(shape_id)
+    shape.style.fill = Some(ColorFill(color))
+  }
+  
+  /// 设置描边
+  fn set_stroke(
+    self: AnimationAPI,
+    shape_id: String,
+    color: String,
+    width: Double,
+  ) -> Unit {
+    let shape = self.find_shape(shape_id)
+    shape.style.stroke = Some({
+      color, width, cap: Round, join: Round
+    })
+  }
+}
+```
+
+### 4.2 AI Agent 集成示例
+
+```moonbit
+/// AI Agent 可使用的简化 API
+/// 示例：从自然语言描述创建动画
+
+fn create_animation_from_description(desc: AnimationDescription) -> Document {
+  let api = AnimationAPI::create_document(
+    name: desc.name,
+    width: 800,
+    height: 600,
+    fps: 12,
+  )
+  
+  // 创建图层
+  for layer_desc in desc.layers {
+    let layer_id = api.create_layer(layer_desc.name)
+    
+    // 创建关键帧
+    for frame_desc in layer_desc.keyframes {
+      let frame_id = api.insert_keyframe(layer_id, frame_desc.index)
+      
+      // 添加图形
+      for shape_desc in frame_desc.shapes {
+        match shape_desc.shape_type {
+          case "rectangle" => 
+            api.add_rectangle(layer_id, frame_desc.index,
+              shape_desc.x, shape_desc.y,
+              shape_desc.width, shape_desc.height,
+              shape_desc.fill, shape_desc.stroke)
+          case "ellipse" =>
+            api.add_ellipse(layer_id, frame_desc.index,
+              shape_desc.cx, shape_desc.cy,
+              shape_desc.rx, shape_desc.ry,
+              shape_desc.fill, shape_desc.stroke)
+          case "path" =>
+            api.add_path(layer_id, frame_desc.index,
+              shape_desc.path_data,
+              shape_desc.fill, shape_desc.stroke)
+        }
+        
+        // 应用变换
+        if shape_desc.transform != None {
+          let shape_id = api.get_last_shape_id(layer_id, frame_desc.index)
+          let t = shape_desc.transform.unwrap()
+          api.move_shape(shape_id, t.translate_x, t.translate_y)
+          api.scale_shape(shape_id, t.scale_x, t.scale_y)
+          api.rotate_shape(shape_id, t.rotation)
+        }
+      }
+    }
+  }
+  
+  api.doc
+}
+```
+
+---
+
+## 五、Animation → API（查询与分析）
+
+### 5.1 查询 API
+
+```moonbit
+impl AnimationAPI {
+  // ========== 信息查询 ==========
+  
+  /// 获取文档信息
+  fn get_document_info(self: AnimationAPI) -> DocumentInfo {
+    {
+      name: self.doc.meta.name,
+      width: self.doc.stage.width,
+      height: self.doc.stage.height,
+      fps: self.doc.stage.fps,
+      total_frames: self.doc.stage.total_frames,
+      layer_count: self.doc.timeline.layers.length(),
+    }
+  }
+  
+  /// 获取图层列表
+  fn get_layers(self: AnimationAPI) -> Array[LayerInfo] {
+    self.doc.timeline.layers.map(|layer| {
+      {
+        id: layer.id,
+        name: layer.name,
+        visible: layer.visible,
+        keyframe_count: layer.frames.count(|f| f.is_keyframe),
+      }
+    })
+  }
+  
+  /// 获取帧内容
+  fn get_frame_content(
+    self: AnimationAPI,
+    layer_id: String,
+    frame_index: Int,
+  ) -> FrameContent {
+    let frame = self.get_frame(layer_id, frame_index)
+    {
+      shapes: frame.shapes.map(|s| self.shape_to_info(s)),
+    }
+  }
+  
+  /// 获取图形详情
+  fn get_shape_info(self: AnimationAPI, shape_id: String) -> ShapeInfo {
+    let shape = self.find_shape(shape_id)
+    {
+      id: shape.id,
+      type: shape.shape.type_name(),
+      transform: shape.transform,
+      style: shape.style,
+    }
+  }
+  
+  // ========== 动画分析 ==========
+  
+  /// 分析图形在时间轴上的变化
+  fn analyze_shape_animation(
+    self: AnimationAPI,
+    shape_id: String,
+  ) -> Array[KeyframeTransform] {
+    // 遍历所有帧，找到该图形的变换变化
+    let transforms = []
+    for layer in self.doc.timeline.layers {
+      for (frame_idx, frame) in layer.frames {
+        let shape = frame.shapes.find(|s| s.id == shape_id)
+        if shape != None {
+          transforms.push({
+            frame: frame_idx,
+            transform: shape.unwrap().transform,
+          })
+        }
+      }
+    }
+    transforms.sort_by(|a, b| a.frame - b.frame)
+  }
+  
+  /// 检测动画循环
+  fn detect_animation_loop(self: AnimationAPI) -> Option[Int] {
+    // 分析最后一帧与第一帧的差异
+    // 如果相似度高于阈值，认为有循环
+  }
+}
+```
+
+### 5.2 导出为数据格式
+
+```moonbit
+impl AnimationAPI {
+  /// 导出为 JSON Schema（供 AI 理解）
+  fn export_schema(self: AnimationAPI) -> String {
+    // 返回 .enim 格式的 JSON Schema
+    // AI Agent 可据此理解数据结构
+  }
+  
+  /// 导出动画摘要（供 AI 分析）
+  fn export_summary(self: AnimationAPI) -> AnimationSummary {
+    {
+      info: self.get_document_info(),
+      layers: self.get_layers(),
+      // 统计信息
+      stats: {
+        total_shapes: self.count_all_shapes(),
+        keyframe_count: self.count_all_keyframes(),
+        // ...
+      },
+    }
+  }
+}
+```
+
+---
+
+## 六、开发阶段
+
+### 阶段一：基础导出（MVP）
+
+- PNG 序列帧导出
+- 基础文件保存/加载
+- 验证 .enim 格式
+
+### 阶段二：基础 API
+
+- 文档创建/打开/保存
+- 图层 CRUD
+- 关键帧 CRUD
+- 基础图形添加（矩形、椭圆、线条）
+
+### 阶段三：完整 API
+
+- 贝塞尔路径 API
+- 变换操作（移动、缩放、旋转）
+- 样式操作（填充、描边）
+- 撤销/重做支持
+
+### 阶段四：导入功能
+
+- 图片序列导入
+- SVG 导入
+- 资源管理
+
+### 阶段五：代码生成
+
+- Lottie JSON 导出
+- React 组件生成（可选）
+- CSS 动画生成（可选）
+
+### 阶段六：AI Agent 集成
+
+- API 文档生成
+- 自然语言到动画描述转换
+- AI Agent 调用示例
+
+---
+
+## 七、与 .enim 格式的关系
+
+`.enim` 文件格式是双向转换的数据基础：
+
+| 转换方向 | .enim 的角色 |
+|----------|-------------|
+| Animation → Output | 数据源，渲染/编码的输入 |
+| Output → Animation | 目标格式，导入数据的载体 |
+| API → Animation | 操作对象，API 修改的结构 |
+| Animation → API | 数据表示，API 查询的结果 |
+
+**格式设计要点**：
+- JSON 格式 → 易于程序化读写
+- 唯一 ID → 精确定位修改目标
+- 类型字段 → 支持多态图形
+- 扁平结构 → 减少嵌套复杂度
+
+---
+
+## 八、参考实现
+
+**Pencil 的 Design ↔ Code**：
+- 核心思想：设计文件与代码在同一工作空间
+- AI Agent 可同时访问设计和代码
+- 变量系统：CSS ↔ Pencil 双向同步
+
+**Enimate 的 Animation ↔ API**：
+- 核心思想：动画数据可被程序化操作
+- AI Agent 通过 API 创建/编辑动画
+- 导出系统：动画 → 多种输出格式
+
+| Pencil | Enimate |
+|--------|---------|
+| Design ↔ Code | Animation ↔ API |
+| UI 组件 | 图形 + 时间轴 |
+| CSS 变量 | 动画变量（颜色、尺寸） |
+| React/Vue 代码 | PNG/Lottie/代码 |
