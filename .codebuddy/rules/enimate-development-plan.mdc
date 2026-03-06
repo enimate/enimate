@@ -1,0 +1,789 @@
+# Enimate 开发计划与软件设计大纲
+
+> 本文档为 AI 编程工具 (Codebuddy) 提供项目开发指导。
+
+## 项目概述
+
+- **名称**：Enimate（Adobe Animate 替代品）
+- **目标**：使用 MoonBit 开发 2D 动画制作工具 Native 端 MVP
+- **核心原则**：能画、能动、能导出
+- **渲染后端**：Skia（唯一实现，渲染抽象层预留其他后端接口设计）
+
+---
+
+## 一、开发计划（分阶段）
+
+### 阶段零：Skia 环境准备与配置
+
+#### 0.1 Skia 源码获取
+- 克隆 Skia 仓库
+- 配置 depot_tools
+- 同步第三方依赖
+
+#### 0.2 Skia 编译配置
+- 配置编译参数（静态库、优化级别、平台适配）
+- 启用必要模块：
+  - `skia_use_system_libpng = true`
+  - `skia_use_system_zlib = true`
+  - `skia_enable_gpu = true`（Vulkan 后端支持）
+  - `skia_use_vulkan = true`
+- 生成 Ninja 构建文件
+- 编译 Skia 静态库
+
+#### 0.3 Skia 集成验证
+- 创建最小化测试程序验证 Skia 渲染
+- 验证 Vulkan 后端初始化
+- 验证基本图形绘制（矩形、圆形、路径）
+
+---
+
+### 阶段一：基础设施搭建
+
+#### 1.1 开发环境
+- 搭建 MoonBit 开发环境
+- 配置项目结构（moon.mod.json）
+- 配置 C/C++ 源码目录结构
+
+#### 1.2 渲染抽象层（RAL）设计
+- 定义渲染后端接口（IRenderBackend）
+- 定义图形原语抽象（Shape, Path, Image）
+- 定义画布抽象（Canvas, Surface）
+- 实现渲染资源管理接口
+
+#### 1.3 Skia 后端实现
+- 实现 `SkiaBackend : IRenderBackend`
+- 实现 `SkiaCanvas : Canvas`
+- 实现 `SkiaPath : Path`
+- FFI 绑定层：MoonBit ↔ C Bridge ↔ Skia C API
+
+#### 1.4 窗口系统集成
+- GLFW 窗口管理
+- Vulkan Surface 创建
+- Skia Vulkan 上下文初始化
+- 交换链管理
+
+---
+
+### 阶段二：核心数据结构与图层系统
+
+#### 2.1 文档模型
+- 实现 Document → Layer → Frame 数据结构
+- 使用 MoonBit ADT 定义核心类型
+- 实现不可变数据结构操作
+
+#### 2.2 图层系统
+- 实现图层面板 UI（Dear ImGui）
+- 图层新建/删除/重命名
+- 图层显示/隐藏/锁定
+- 图层顺序调整（上移/下移）
+
+#### 2.3 图形元素定义
+```moonbit
+type Shape =
+  | Rectangle(Double, Double, Double, Double)
+  | Ellipse(Double, Double, Double, Double)
+  | Line(Double, Double, Double, Double)
+  | Path(Array[Point])
+  | Group(Array[Shape])
+
+type Style = {
+  fill: Option[Color],
+  stroke: Option[(Color, Double)],
+  opacity: Double,
+}
+```
+
+---
+
+### 阶段三：时间轴与动画系统
+
+#### 3.1 时间轴数据结构
+- 帧索引管理
+- 关键帧标记
+- 帧率控制
+
+#### 3.2 时间轴 UI
+- 时间轴面板组件（Dear ImGui）
+- 关键帧可视化
+- 播放头显示
+- 帧刻度与标尺
+
+#### 3.3 关键帧功能
+- 插入关键帧
+- 删除关键帧
+- 空白关键帧支持
+- 帧内容复制/粘贴
+
+#### 3.4 洋葱皮效果
+- 渲染前后 N 帧（半透明叠加）
+- 可配置洋葱皮范围
+- 颜色编码（前帧/后帧）
+
+#### 3.5 播放控制
+- 播放/暂停/停止
+- 循环播放
+- 帧步进（前进/后退）
+- 拖动播放头（Scrubbing）
+
+---
+
+### 阶段四：绘图工具系统
+
+#### 4.1 工具抽象
+```moonbit
+type Tool =
+  | SelectTool
+  | RectangleTool
+  | EllipseTool
+  | LineTool
+  | PencilTool
+  | HandTool
+  | ZoomTool
+```
+
+#### 4.2 选择工具
+- 点选图形
+- 框选多个图形
+- 移动选中图形
+- 变换手柄（缩放/旋转 - P1）
+
+#### 4.3 形状工具
+- 矩形绘制
+- 椭圆绘制
+- 线条绘制
+- 实时预览
+
+#### 4.4 自由绘制
+- 铅笔工具（自由路径）
+- 路径平滑算法
+- 笔触大小设置
+
+#### 4.5 画布操作
+- 平移（Hand Tool / 中键拖动）
+- 缩放（滚轮 / Zoom Tool）
+- 缩放中心点控制
+
+---
+
+### 阶段五：渲染中间层完善
+
+#### 5.1 渲染命令队列
+- 设计渲染命令抽象
+- 命令录制与提交
+- 批量渲染优化
+
+#### 5.2 图层合成
+- 图层可见性裁剪
+- 透明度混合
+- 图层顺序排序渲染
+
+#### 5.3 洋葱皮渲染
+- 多帧合成渲染
+- Alpha 混合控制
+- 渲染缓存优化
+
+#### 5.4 后端扩展预留
+- 接口设计预留扩展点（不实现其他后端）
+- 配置文件支持（为未来后端选择预留）
+- 后端能力查询接口
+
+---
+
+### 阶段六：导出与持久化
+
+#### 6.1 PNG 序列帧导出
+- 使用 Skia 内置 `SkEncodeImage` / `SkPngEncoder` 导出 PNG
+- 逐帧渲染到 Skia Surface 并保存
+- 文件命名规则（如 `frame_0001.png`）
+- 导出进度显示
+
+#### 6.2 项目文件格式
+- 文件后缀：`.enim`
+- 详细设计见：[enimate-project-format.mdc](./enimate-project-format.mdc)
+- 核心：Document → Timeline → Layer → Frame → ShapeInstance
+- 支持 Symbol（元件）复用机制
+- 版本兼容性设计
+
+#### 6.3 项目文件操作
+- 新建项目
+- 打开项目
+- 保存项目
+- 最近项目列表
+
+---
+
+### 阶段七：测试与优化
+
+#### 7.1 功能测试
+- 各工具功能测试
+- 动画播放测试
+- 导出功能验证
+
+#### 7.2 性能优化
+- 渲染性能分析
+- 内存使用优化
+- 帧缓存策略
+
+#### 7.3 Bug 修复与打磨
+- 边缘情况处理
+- 用户体验改进
+- 错误提示完善
+
+---
+
+## 二、软件设计大纲
+
+### 架构概览
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        应用层 (Application)                       │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────────┐│
+│  │ 工具系统  │ │ 时间轴    │ │ 图层管理 │ │    导出/持久化        ││
+│  └──────────┘ └──────────┘ └──────────┘ └──────────────────────┘│
+├─────────────────────────────────────────────────────────────────┤
+│                        文档模型 (Document Model)                  │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────────┐│
+│  │ Document │ │  Layer   │ │  Frame   │ │       Shape          ││
+│  └──────────┘ └──────────┘ └──────────┘ └──────────────────────┘│
+├─────────────────────────────────────────────────────────────────┤
+│                      渲染抽象层 (Render Abstraction Layer)         │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │                    IRenderBackend                        │   │
+│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐ │   │
+│  │  │ ICanvas     │ │ IPath       │ │ IImage/IText        │ │   │
+│  │  └─────────────┘ └─────────────┘ └─────────────────────┘ │   │
+│  └──────────────────────────────────────────────────────────┘   │
+├─────────────────────────────────────────────────────────────────┤
+│                        后端实现 (Backend Implementations)          │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │                      SkiaBackend (唯一实现)                   │ │
+│  │  注：其他后端（Vulkan/DX12）仅预留接口设计，未来按需实现        │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+├─────────────────────────────────────────────────────────────────┤
+│                        平台层 (Platform Layer)                    │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  GLFW (窗口) │ Vulkan (GPU) │ 系统库 (FFI)               │   │
+│  └──────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 核心模块详细设计
+
+#### 1. 渲染抽象层 (RAL)
+
+##### 1.1 后端接口定义
+```moonbit
+// 渲染后端接口
+trait IRenderBackend {
+  // 初始化
+  fn initialize(config: BackendConfig) -> Result[Unit, String]
+  fn shutdown() -> Unit
+  
+  // 画布管理
+  fn create_canvas(width: Int, height: Int) -> Result[Canvas, String]
+  fn destroy_canvas(canvas: Canvas) -> Unit
+  
+  // 资源管理
+  fn create_image(data: ByteArray, width: Int, height: Int) -> Result[Image, String]
+  fn destroy_image(image: Image) -> Unit
+  
+  // 渲染
+  fn begin_frame(canvas: Canvas) -> Unit
+  fn end_frame(canvas: Canvas) -> Unit
+  fn present(canvas: Canvas) -> Unit
+  
+  // 能力查询
+  fn get_capabilities() -> BackendCapabilities
+}
+
+type BackendCapabilities = {
+  gpu_accelerated: Bool,
+  max_texture_size: Int,
+  supported_formats: Array[String],
+}
+```
+
+##### 1.2 画布接口
+```moonbit
+trait ICanvas {
+  // 变换
+  fn save() -> Unit
+  fn restore() -> Unit
+  fn translate(dx: Double, dy: Double) -> Unit
+  fn scale(sx: Double, sy: Double) -> Unit
+  fn rotate(angle: Double) -> Unit
+  fn set_matrix(matrix: Matrix) -> Unit
+  
+  // 绘制
+  fn clear(color: Color) -> Unit
+  fn draw_path(path: Path, paint: Paint) -> Unit
+  fn draw_rect(rect: Rect, paint: Paint) -> Unit
+  fn draw_circle(center: Point, radius: Double, paint: Paint) -> Unit
+  fn draw_image(image: Image, dst: Rect, src: Option[Rect]) -> Unit
+  
+  // 裁剪
+  fn clip_rect(rect: Rect) -> Unit
+  fn clip_path(path: Path) -> Unit
+}
+
+type Paint = {
+  color: Color,
+  style: PaintStyle,
+  stroke_width: Double,
+  opacity: Double,
+}
+
+type PaintStyle =
+  | Fill
+  | Stroke
+  | FillAndStroke
+```
+
+##### 1.3 路径接口
+```moonbit
+trait IPath {
+  fn move_to(x: Double, y: Double) -> Unit
+  fn line_to(x: Double, y: Double) -> Unit
+  fn quad_to(cx: Double, cy: Double, x: Double, y: Double) -> Unit
+  fn cubic_to(c1x: Double, c1y: Double, c2x: Double, c2y: Double, x: Double, y: Double) -> Unit
+  fn close() -> Unit
+  fn reset() -> Unit
+}
+```
+
+##### 1.4 后端工厂
+```moonbit
+// 当前只实现 Skia 后端，其他后端仅预留类型定义
+fn create_backend() -> IRenderBackend {
+  SkiaBackend::new()
+}
+
+// 预留后端类型，未来扩展时使用
+type BackendType =
+  | Skia    // 当前唯一实现
+  // 未来扩展（暂不实现）:
+  // | Vulkan
+  // | DX12
+```
+
+---
+
+#### 2. Skia 后端实现
+
+##### 2.1 架构
+```
+MoonBit Application
+        │
+        ▼
+┌───────────────────┐
+│   SkiaBackend     │  (MoonBit)
+│   implements      │
+│   IRenderBackend  │
+└─────────┬─────────┘
+          │ FFI
+          ▼
+┌───────────────────┐
+│   skia_bridge.c   │  (C Bridge Layer)
+│   类型转换        │
+│   生命周期管理     │
+└─────────┬─────────┘
+          │ C API
+          ▼
+┌───────────────────┐
+│   Skia C API      │
+│   (include/c/)    │
+└─────────┬─────────┘
+          │ C++
+          ▼
+┌───────────────────┐
+│   Skia Library    │
+│   (libskia.a)     │
+└───────────────────┘
+```
+
+##### 2.2 Skia Bridge 示例
+```c
+// skia_bridge.h
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct SkiaCanvas SkiaCanvas;
+typedef struct SkiaPath SkiaPath;
+
+// Canvas
+SkiaCanvas* skia_canvas_create(int width, int height);
+void skia_canvas_destroy(SkiaCanvas* canvas);
+void skia_canvas_clear(SkiaCanvas* canvas, uint32_t color);
+void skia_canvas_draw_rect(SkiaCanvas* canvas, float x, float y, float w, float h, uint32_t color, float stroke_width);
+void skia_canvas_flush(SkiaCanvas* canvas);
+
+// Path
+SkiaPath* skia_path_create();
+void skia_path_destroy(SkiaPath* path);
+void skia_path_move_to(SkiaPath* path, float x, float y);
+void skia_path_line_to(SkiaPath* path, float x, float y);
+void skia_path_close(SkiaPath* path);
+
+// PNG Export (使用 Skia 内置编码)
+int skia_canvas_save_to_png(SkiaCanvas* canvas, const char* filepath);
+
+#ifdef __cplusplus
+}
+#endif
+```
+
+##### 2.3 MoonBit FFI 绑定
+```moonbit
+// skia_ffi.mbt
+extern "c" fn skia_canvas_create(width: Int, height: Int) -> RawSkiaCanvas
+extern "c" fn skia_canvas_destroy(canvas: RawSkiaCanvas) -> Unit
+extern "c" fn skia_canvas_clear(canvas: RawSkiaCanvas, color: UInt32) -> Unit
+extern "c" fn skia_canvas_draw_rect(canvas: RawSkiaCanvas, x: Double, y: Double, w: Double, h: Double, color: UInt32, stroke_width: Double) -> Unit
+extern "c" fn skia_canvas_flush(canvas: RawSkiaCanvas) -> Unit
+
+type RawSkiaCanvas Int
+
+// 封装为 MoonBit 类型
+type SkiaCanvas {
+  priv raw: RawSkiaCanvas
+  width: Int
+  height: Int
+}
+
+impl ICanvas for SkiaCanvas with ICanvas {
+  fn clear(color: Color) -> Unit {
+    let color_value = color_to_u32(color)
+    skia_canvas_clear(self.raw, color_value)
+  }
+  
+  fn draw_rect(rect: Rect, paint: Paint) -> Unit {
+    let color_value = color_to_u32(paint.color)
+    skia_canvas_draw_rect(self.raw, rect.x, rect.y, rect.w, rect.h, color_value, paint.stroke_width)
+  }
+}
+```
+
+---
+
+#### 3. Skia 编译配置
+
+##### 3.1 系统要求
+- Python 3.x
+- Git
+- C++17 编译器
+- Ninja 构建系统
+- depot_tools
+
+##### 3.2 获取源码
+```bash
+# 安装 depot_tools
+git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+export PATH="${PWD}/depot_tools:${PATH}"
+
+# 克隆 Skia
+git clone https://skia.googlesource.com/skia.git
+cd skia
+python3 tools/git-sync-deps
+```
+
+##### 3.3 编译配置 (gn args)
+```
+# out/Release/args.gn
+is_official_build = true
+is_component_build = false
+
+# 目标平台
+target_os = "linux"  # 或 "mac", "win"
+target_cpu = "x64"
+
+# GPU 支持
+skia_enable_gpu = true
+skia_use_vulkan = true
+skia_use_gl = false
+
+# 图像格式支持
+skia_use_system_libpng = true
+skia_use_system_zlib = true
+skia_use_system_libjpeg_turbo = true
+
+# 字体支持
+skia_enable_font_manager = true
+skia_use_system_freetype2 = true
+
+# 优化
+is_debug = false
+symbol_level = 1
+
+# 静态库
+is_component_build = false
+```
+
+##### 3.4 编译命令
+```bash
+gn gen out/Release
+ninja -C out/Release skia
+```
+
+##### 3.5 集成到项目
+```
+enimate/
+├── native/
+│   ├── include/
+│   │   └── skia/           # Skia 头文件 (符号链接或复制)
+│   └── lib/
+│       └── libskia.a       # Skia 静态库
+├── moon.mod.json
+└── ...
+```
+
+---
+
+#### 4. 文档模型
+
+```moonbit
+// 文档
+type Document = {
+  name: String,
+  width: Double,
+  height: Double,
+  fps: Int,
+  total_frames: Int,
+  layers: Array[Layer],
+  current_frame: Int,
+  current_layer: Int,
+}
+
+// 图层
+type Layer = {
+  id: Int,
+  name: String,
+  visible: Bool,
+  locked: Bool,
+  opacity: Double,
+  blend_mode: BlendMode,
+  frames: Map[Int, Frame],
+}
+
+// 帧
+type Frame = {
+  index: Int,
+  is_keyframe: Bool,
+  is_empty: Bool,
+  shapes: Array[ShapeInstance],
+}
+
+// 图形实例（包含变换）
+type ShapeInstance = {
+  id: Int,
+  shape: Shape,
+  style: Style,
+  transform: Transform,
+}
+
+// 变换
+type Transform = {
+  translate_x: Double,
+  translate_y: Double,
+  scale_x: Double,
+  scale_y: Double,
+  rotation: Double,
+}
+
+// 混合模式
+type BlendMode =
+  | Normal
+  | Multiply
+  | Screen
+  | Overlay
+```
+
+---
+
+#### 5. UI 布局
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         主菜单栏                                  │
+│  文件  编辑  视图  插入  修改  控制  窗口  帮助                      │
+├─────────────────────────────────────────────────────────────────┤
+│                         工具栏                                    │
+│  [选择] [矩形] [椭圆] [线条] [铅笔] [手型] | 缩放: 100% | FPS: 12  │
+├─────────┬───────────────────────────────────────────┬───────────┤
+│         │                                           │           │
+│  工具箱  │                                           │  属性面板  │
+│         │                                           │           │
+│ ○ 选择  │              舞 台                        │ 位置:      │
+│ □ 矩形  │           (Canvas)                       │  X: 0      │
+│ ○ 椭圆  │                                           │  Y: 0      │
+│ / 线条  │     ┌─────────────────────────┐         │ 尺寸:      │
+│ ✏ 铅笔  │     │                         │         │  W: 100    │
+│ ✋ 手型  │     │     动画内容            │         │  H: 100    │
+│ 🔍 缩放  │     │                         │         │ 填充:      │
+│         │     └─────────────────────────┘         │  #FF0000   │
+│ 颜色:   │                                           │ 描边:      │
+│ [█] 红  │                                           │  #000000   │
+│ [ ] 蓝  │                                           │  宽度: 1   │
+│         │                                           │           │
+├─────────┴───────────────────────────────────────────┴───────────┤
+│                         时间轴                                    │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │ 图层1 │ ● ● ● ○ ○ ● ○ ○ ● ○ ○ │  洋葱皮: [前3帧][后3帧]     ││
+│  │ 图层2 │ ○ ● ○ ○ ○ ○ ● ○ ○ ○ ○ │  ◁ ▷ ▶ ⏹ 循环: [✓]         ││
+│  │ 背景  │ ● ● ● ● ● ● ● ● ● ● ● │  帧: 1/24 FPS: 12          ││
+│  └─────────────────────────────────────────────────────────────┘│
+│  [1][2][3][4][5][6][7][8][9][10][11][12][...帧刻度...]           │
+├─────────────────────────────────────────────────────────────────┤
+│  图层面板                                          │   状态栏    │
+│  ┌──────────────────┐                              │  缩放: 100% │
+│  │ 👁️ 🔒 图层1      │ ▲                            │  帧: 1/24   │
+│  │ 👁️ 🔓 图层2      │ ▼                            │  工具: 选择 │
+│  │ 👁️ 🔓 背景       │ ─                            │             │
+│  │ [+ 添加图层]     │                              │             │
+│  └──────────────────┘                              │             │
+└─────────────────────────────────────────────────────────────────┘
+
+图例：
+● 关键帧 (Keyframe)
+○ 空白关键帧 (Empty Keyframe)
+━ 普通帧 (Frame)
+👁️ 可见性
+🔒 锁定状态
+```
+
+---
+
+### FFI 绑定策略
+
+#### 外部依赖清单
+
+| 库名称 | 用途 | 绑定方式 | 文件 |
+|--------|------|----------|------|
+| Skia | 2D 图形渲染 + PNG 编码 | C Bridge | libskia.a |
+| GLFW | 窗口管理 | FFI 直接 | libglfw.so |
+| Dear ImGui | UI 组件 | C Bridge | imgui/*.cpp |
+
+> **注**：Skia 内置 `SkPngEncoder`，无需额外引入 giflib 或 stb_image_write。遵循"如无必要，勿增实体"原则。
+
+#### 绑定原则
+
+1. **最小化 FFI 边界**：封装为 MoonBit 友好的 API
+2. **C Bridge 层**：处理复杂类型转换（如 Skia C++ → C）
+3. **所有权清晰**：明确资源创建/销毁责任
+4. **错误处理**：FFI 调用返回 Result 类型
+
+---
+
+### MVP 边界（明确不做）
+
+| 功能 | 原因 |
+|------|------|
+| ❌ 骨骼动画 | 复杂度过高 |
+| ❌ 脚本系统 | 类 ActionScript，开发周期长 |
+| ❌ 粒子系统 | 非核心功能 |
+| ❌ 贝塞尔手柄编辑 | 交互复杂 |
+| ❌ 音频同步 | 需要音频引擎集成 |
+| ❌ 渐变填充 | Skia 支持但 UI 复杂 |
+| ❌ 滤镜效果 | 性能优化复杂 |
+| ❌ 组件/元件系统 | 数据结构复杂 |
+| ❌ 补间动画 | MVP 聚焦逐帧 |
+
+---
+
+### 开发优先级
+
+| 优先级 | 功能 | 依赖 |
+|--------|------|------|
+| P0 | Skia 编译与集成 | 无 |
+| P0 | 渲染抽象层 | 无 |
+| P0 | 窗口与画布渲染 | Skia |
+| P0 | 基础绘图工具 | RAL |
+| P0 | 图层系统 | RAL |
+| P0 | 时间轴 UI | 无 |
+| P0 | 关键帧功能 | 图层系统 |
+| P0 | 洋葱皮效果 | 渲染系统 |
+| P0 | 播放控制 | 时间轴 |
+| P0 | PNG 序列帧导出 | Skia 内置编码 |
+| P1 | 项目保存/加载 | 文档模型 |
+| P1 | 图形变换（缩放/旋转） | 选择工具 |
+| P2 | 自定义快捷键 | 无 |
+| P2 | 撤销/重做 | 命令模式 |
+
+---
+
+### 项目目录结构
+
+```
+enimate/
+├── moon.mod.json              # MoonBit 项目配置
+├── moon.pkg.json              # 包配置
+├── LICENSE
+├── README.md
+│
+├── src/                       # MoonBit 源码
+│   ├── main.mbt               # 入口
+│   ├── app/                   # 应用层
+│   │   ├── app.mbt
+│   │   ├── document.mbt
+│   │   └── commands.mbt
+│   ├── model/                 # 数据模型
+│   │   ├── document.mbt
+│   │   ├── layer.mbt
+│   │   ├── frame.mbt
+│   │   └── shape.mbt
+│   ├── render/                # 渲染抽象层
+│   │   ├── backend.mbt        # 后端接口
+│   │   ├── canvas.mbt         # 画布抽象
+│   │   ├── path.mbt           # 路径抽象
+│   │   └── skia/              # Skia 实现
+│   │       ├── skia_backend.mbt
+│   │       ├── skia_canvas.mbt
+│   │       └── skia_ffi.mbt
+│   ├── tools/                 # 工具系统
+│   │   ├── tool.mbt           # 工具基类
+│   │   ├── select.mbt
+│   │   ├── rectangle.mbt
+│   │   └── pencil.mbt
+│   ├── ui/                    # UI 层
+│   │   ├── imgui_ffi.mbt
+│   │   ├── timeline.mbt
+│   │   ├── layer_panel.mbt
+│   │   └── toolbar.mbt
+│   └── export/                # 导出功能
+│       └── png.mbt            # PNG 序列帧导出（使用 Skia 内置编码）
+│
+├── native/                    # C/C++ 源码
+│   ├── include/
+│   │   ├── skia/              # Skia 头文件
+│   │   └── imgui/             # ImGui 头文件
+│   ├── src/
+│   │   ├── skia_bridge.cpp    # Skia C Bridge
+│   │   ├── imgui_bridge.cpp   # ImGui C Bridge
+│   │   └── glfw_bridge.c      # GLFW C Bridge
+│   └── lib/
+│       ├── libskia.a          # Skia 静态库
+│       └── libglfw.a          # GLFW 静态库
+│
+├── third_party/               # 第三方库
+│   └── imgui/                 # Dear ImGui
+│
+├── scripts/                   # 构建脚本
+│   ├── build_skia.sh          # Skia 编译脚本
+│   └── setup_deps.sh          # 依赖安装
+│
+└── .codebuddy/
+    └── rules/
+        └── enimate-development-plan.mdc  # 本文档
+```
+
+---
+
+## 备注
+
+- 本文档应作为 AI 编程工具的主要参考
+- 开发过程中根据实际情况调整优先级
+- 遇到技术难点可回退到更简单的实现方案
+- 保持代码质量，即使 MVP 阶段也要有良好的架构设计

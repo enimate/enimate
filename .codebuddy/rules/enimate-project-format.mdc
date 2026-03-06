@@ -1,0 +1,692 @@
+# Enimate 工程文件格式设计
+
+> 本文档定义 Enimate 项目的工程文件格式（`.enim`），供 AI 编程工具参考。
+
+## 一、文件后缀名
+
+- **后缀名**：`.enim`（Enimate 的缩写）
+- **格式**：JSON 文本文件
+- **编码**：UTF-8
+- **示例**：`my-animation.enim`
+
+---
+
+## 二、设计原则
+
+借鉴 Pencil 的 `.pen` 格式设计思想：
+
+| 原则 | 说明 |
+|------|------|
+| JSON 结构 | 人类可读，易于调试和版本控制 |
+| 唯一标识 | 每个实体有唯一 `id`，便于引用和修改 |
+| 类型驱动 | 使用 `type` 字段区分不同实体类型 |
+| 复用机制 | 支持 Symbol（元件）复用，减少重复数据 |
+| 向前兼容 | 使用 `version` 字段，支持格式演进 |
+| 最小化存储 | 引用共享资源，避免数据冗余 |
+
+---
+
+## 三、核心数据结构
+
+### 3.1 文档根结构
+
+```typescript
+interface EnimateDocument {
+  /** 格式版本，用于兼容性检查 */
+  version: string;
+  
+  /** 项目元数据 */
+  meta: DocumentMeta;
+  
+  /** 舞台设置 */
+  stage: StageConfig;
+  
+  /** 资源库（图片、元件等） */
+  resources: Resource[];
+  
+  /** 时间轴（图层列表） */
+  timeline: Timeline;
+  
+  /** 变量定义（可选，用于主题/配色） */
+  variables?: VariableMap;
+}
+
+interface DocumentMeta {
+  /** 项目名称 */
+  name: string;
+  /** 创建时间（ISO 8601） */
+  created_at: string;
+  /** 最后修改时间 */
+  modified_at: string;
+  /** 作者 */
+  author?: string;
+  /** 描述 */
+  description?: string;
+}
+
+interface StageConfig {
+  /** 画布宽度（像素） */
+  width: number;
+  /** 画布高度（像素） */
+  height: number;
+  /** 帧率 */
+  fps: number;
+  /** 背景色（RGBA 十六进制） */
+  background_color: string;
+  /** 总帧数 */
+  total_frames: number;
+}
+```
+
+### 3.2 资源系统
+
+```typescript
+interface Resource {
+  id: string;
+  name: string;
+  type: ResourceType;
+}
+
+type ResourceType = 
+  | SymbolResource   // 元件（可复用的图形组合）
+  | ImageResource    // 外部图片
+  | AudioResource    // 音频（预留，MVP 不实现）
+  ;
+
+/** 元件资源 - 可复用的图形组合 */
+interface SymbolResource extends Resource {
+  type: "symbol";
+  /** 元件类型 */
+  symbol_type: "graphic" | "button" | "movie_clip";
+  /** 元件内容（图形树） */
+  content: ShapeNode[];
+  /** 元件内部时间轴（movie_clip 类型） */
+  inner_timeline?: Timeline;
+}
+
+/** 图片资源 */
+interface ImageResource extends Resource {
+  type: "image";
+  /** 相对路径或 base64 */
+  source: string;
+  width: number;
+  height: number;
+}
+```
+
+### 3.3 时间轴结构
+
+```typescript
+interface Timeline {
+  /** 图层列表（从上到下） */
+  layers: Layer[];
+  /** 当前帧索引（0-based） */
+  current_frame: number;
+  /** 当前图层索引 */
+  current_layer: number;
+}
+
+interface Layer {
+  /** 唯一标识 */
+  id: string;
+  /** 图层名称 */
+  name: string;
+  /** 可见性 */
+  visible: boolean;
+  /** 锁定状态 */
+  locked: boolean;
+  /** 透明度（0.0 - 1.0） */
+  opacity: number;
+  /** 混合模式 */
+  blend_mode: BlendMode;
+  /** 帧数据（Map: 帧索引 → 帧） */
+  frames: { [frame_index: number]: Frame };
+}
+
+type BlendMode = 
+  | "normal"
+  | "multiply"
+  | "screen"
+  | "overlay"
+  | "darken"
+  | "lighten"
+  ;
+
+interface Frame {
+  /** 帧索引 */
+  index: number;
+  /** 是否为关键帧 */
+  is_keyframe: boolean;
+  /** 是否为空白关键帧 */
+  is_empty: boolean;
+  /** 帧标签（可选） */
+  label?: string;
+  /** 图形实例列表 */
+  shapes: ShapeInstance[];
+}
+```
+
+### 3.4 图形系统
+
+```typescript
+/** 图形实例 - 在帧中的具体实例 */
+interface ShapeInstance {
+  /** 唯一标识 */
+  id: string;
+  /** 图形数据或资源引用 */
+  shape: Shape | SymbolRef;
+  /** 样式 */
+  style: Style;
+  /** 变换 */
+  transform: Transform;
+}
+
+/** 变换矩阵 */
+interface Transform {
+  translate_x: number;
+  translate_y: number;
+  scale_x: number;
+  scale_y: number;
+  rotation: number;  // 弧度
+  /** 变换中心点（归一化 0-1） */
+  pivot?: { x: number; y: number };
+}
+
+/** 样式 */
+interface Style {
+  fill?: Fill;
+  stroke?: Stroke;
+  opacity: number;
+}
+
+type Fill = 
+  | ColorFill
+  | GradientFill
+  | ImageFill
+  ;
+
+interface ColorFill {
+  type: "color";
+  color: string;  // RGBA 十六进制
+}
+
+interface GradientFill {
+  type: "gradient";
+  gradient_type: "linear" | "radial";
+  colors: { color: string; position: number }[];
+  /** 渐变角度（度） */
+  angle?: number;
+}
+
+interface ImageFill {
+  type: "image";
+  resource_id: string;  // 引用 ImageResource.id
+}
+
+interface Stroke {
+  color: string;
+  width: number;
+  cap: "butt" | "round" | "square";
+  join: "miter" | "round" | "bevel";
+}
+
+/** 图形节点（用于元件内容） */
+type ShapeNode = 
+  | RectangleShape
+  | EllipseShape
+  | LineShape
+  | PathShape
+  | GroupShape
+  | SymbolRef
+  ;
+
+interface RectangleShape {
+  type: "rectangle";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  corner_radius?: number | [number, number, number, number];
+}
+
+interface EllipseShape {
+  type: "ellipse";
+  cx: number;  // 中心 x
+  cy: number;  // 中心 y
+  rx: number;  // x 半径
+  ry: number;  // y 半径
+  start_angle?: number;
+  sweep_angle?: number;
+}
+
+interface LineShape {
+  type: "line";
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+interface PathShape {
+  type: "path";
+  /** SVG Path 数据 */
+  d: string;
+  fill_rule?: "nonzero" | "evenodd";
+}
+
+interface GroupShape {
+  type: "group";
+  children: ShapeNode[];
+}
+
+/** 元件引用 */
+interface SymbolRef {
+  type: "symbol_ref";
+  /** 引用 SymbolResource.id */
+  ref: string;
+  /** 实例覆盖（类似 .pen 的 descendants） */
+  overrides?: { [path: string]: Partial<ShapeInstance> };
+}
+```
+
+### 3.5 变量系统（可选）
+
+```typescript
+interface VariableMap {
+  [name: string]: Variable;
+}
+
+interface Variable {
+  type: "color" | "number" | "string";
+  value: any;
+  /** 变量描述 */
+  description?: string;
+}
+
+// 使用示例
+// variables: {
+//   "color.primary": { type: "color", value: "#FF5733FF" },
+//   "stroke.width": { type: "number", value: 2 }
+// }
+// 在样式中引用: "$color.primary"
+```
+
+---
+
+## 四、完整示例
+
+```json
+{
+  "version": "1.0.0",
+  "meta": {
+    "name": "Ball Bounce",
+    "created_at": "2024-01-15T10:30:00Z",
+    "modified_at": "2024-01-15T12:45:00Z",
+    "author": "enimate-user"
+  },
+  "stage": {
+    "width": 800,
+    "height": 600,
+    "fps": 12,
+    "background_color": "#FFFFFFFF",
+    "total_frames": 24
+  },
+  "resources": [
+    {
+      "id": "symbol_ball",
+      "name": "Ball",
+      "type": "symbol",
+      "symbol_type": "graphic",
+      "content": [
+        {
+          "type": "ellipse",
+          "cx": 25,
+          "cy": 25,
+          "rx": 25,
+          "ry": 25
+        }
+      ]
+    }
+  ],
+  "timeline": {
+    "layers": [
+      {
+        "id": "layer_bg",
+        "name": "Background",
+        "visible": true,
+        "locked": false,
+        "opacity": 1.0,
+        "blend_mode": "normal",
+        "frames": {
+          "0": {
+            "index": 0,
+            "is_keyframe": true,
+            "is_empty": false,
+            "shapes": [
+              {
+                "id": "bg_rect",
+                "shape": {
+                  "type": "rectangle",
+                  "x": 0,
+                  "y": 0,
+                  "width": 800,
+                  "height": 600
+                },
+                "style": {
+                  "fill": { "type": "color", "color": "#87CEEBFF" },
+                  "opacity": 1.0
+                },
+                "transform": {
+                  "translate_x": 0,
+                  "translate_y": 0,
+                  "scale_x": 1.0,
+                  "scale_y": 1.0,
+                  "rotation": 0
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "layer_ball",
+        "name": "Ball",
+        "visible": true,
+        "locked": false,
+        "opacity": 1.0,
+        "blend_mode": "normal",
+        "frames": {
+          "0": {
+            "index": 0,
+            "is_keyframe": true,
+            "is_empty": false,
+            "shapes": [
+              {
+                "id": "ball_1",
+                "shape": {
+                  "type": "symbol_ref",
+                  "ref": "symbol_ball"
+                },
+                "style": {
+                  "fill": { "type": "color", "color": "#FF0000FF" },
+                  "stroke": { "color": "#000000FF", "width": 2, "cap": "round", "join": "round" },
+                  "opacity": 1.0
+                },
+                "transform": {
+                  "translate_x": 375,
+                  "translate_y": 100,
+                  "scale_x": 1.0,
+                  "scale_y": 1.0,
+                  "rotation": 0
+                }
+              }
+            ]
+          },
+          "6": {
+            "index": 6,
+            "is_keyframe": true,
+            "is_empty": false,
+            "shapes": [
+              {
+                "id": "ball_1",
+                "shape": {
+                  "type": "symbol_ref",
+                  "ref": "symbol_ball"
+                },
+                "style": {
+                  "fill": { "type": "color", "color": "#FF0000FF" },
+                  "stroke": { "color": "#000000FF", "width": 2, "cap": "round", "join": "round" },
+                  "opacity": 1.0
+                },
+                "transform": {
+                  "translate_x": 375,
+                  "translate_y": 450,
+                  "scale_x": 1.0,
+                  "scale_y": 1.2,
+                  "rotation": 0
+                }
+              }
+            ]
+          },
+          "12": {
+            "index": 12,
+            "is_keyframe": true,
+            "is_empty": false,
+            "shapes": [
+              {
+                "id": "ball_1",
+                "shape": {
+                  "type": "symbol_ref",
+                  "ref": "symbol_ball"
+                },
+                "style": {
+                  "fill": { "type": "color", "color": "#FF0000FF" },
+                  "stroke": { "color": "#000000FF", "width": 2, "cap": "round", "join": "round" },
+                  "opacity": 1.0
+                },
+                "transform": {
+                  "translate_x": 375,
+                  "translate_y": 100,
+                  "scale_x": 1.0,
+                  "scale_y": 1.0,
+                  "rotation": 0
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "current_frame": 0,
+    "current_layer": 1
+  }
+}
+```
+
+---
+
+## 五、与 .pen 格式的对比
+
+| 特性 | .pen (Pencil) | .enim (Enimate) |
+|------|---------------|-----------------|
+| 定位 | UI 设计工具 | 2D 动画工具 |
+| 核心实体 | Frame, Rectangle, Text | Layer, Frame, Shape |
+| 时间维度 | 无（静态设计） | 有（时间轴 + 关键帧） |
+| 复用机制 | reusable + ref | Symbol + symbol_ref |
+| 布局系统 | Flexbox | 绝对定位 + 变换 |
+| 变量系统 | 支持（主题） | 支持（可选） |
+| 文件结构 | 扁平 children 树 | 分层 timeline → layers → frames |
+
+---
+
+## 六、MoonBit 数据结构映射
+
+```moonbit
+// document.mbt
+type Document = {
+  version: String,
+  meta: DocumentMeta,
+  stage: StageConfig,
+  resources: Array[Resource],
+  timeline: Timeline,
+  variables: Option[Map[String, Variable]],
+}
+
+type DocumentMeta = {
+  name: String,
+  created_at: String,
+  modified_at: String,
+  author: Option[String],
+  description: Option[String],
+}
+
+type StageConfig = {
+  width: Int,
+  height: Int,
+  fps: Int,
+  background_color: String,
+  total_frames: Int,
+}
+
+// timeline.mbt
+type Timeline = {
+  layers: Array[Layer],
+  current_frame: Int,
+  current_layer: Int,
+}
+
+type Layer = {
+  id: String,
+  name: String,
+  visible: Bool,
+  locked: Bool,
+  opacity: Double,
+  blend_mode: BlendMode,
+  frames: Map[Int, Frame],
+}
+
+type BlendMode =
+  | Normal
+  | Multiply
+  | Screen
+  | Overlay
+  | Darken
+  | Lighten
+
+type Frame = {
+  index: Int,
+  is_keyframe: Bool,
+  is_empty: Bool,
+  label: Option[String],
+  shapes: Array[ShapeInstance],
+}
+
+// shape.mbt
+type ShapeInstance = {
+  id: String,
+  shape: Shape,
+  style: Style,
+  transform: Transform,
+}
+
+type Shape =
+  | Rectangle(Double, Double, Double, Double, Option[CornerRadius])  // x, y, w, h, radius
+  | Ellipse(Double, Double, Double, Double, Option[Double], Option[Double])  // cx, cy, rx, ry, start, sweep
+  | Line(Double, Double, Double, Double)  // x1, y1, x2, y2
+  | Path(String, Option[FillRule])  // d, fill_rule
+  | Group(Array[Shape])
+  | SymbolRef(String, Option[Map[String, ShapeInstance]])  // ref_id, overrides
+
+type Transform = {
+  translate_x: Double,
+  translate_y: Double,
+  scale_x: Double,
+  scale_y: Double,
+  rotation: Double,
+  pivot: Option[{ x: Double, y: Double }>,
+}
+
+type Style = {
+  fill: Option[Fill],
+  stroke: Option[Stroke],
+  opacity: Double,
+}
+
+type Fill =
+  | ColorFill(String)  // color
+  | GradientFill(GradientType, Array[GradientStop], Option[Double])  // type, colors, angle
+  | ImageFill(String)  // resource_id
+
+type Stroke = {
+  color: String,
+  width: Double,
+  cap: StrokeCap,
+  join: StrokeJoin,
+}
+
+type StrokeCap = Butt | Round | Square
+type StrokeJoin = Miter | Round | Bevel
+type FillRule = NonZero | EvenOdd
+type GradientType = Linear | Radial
+type GradientStop = { color: String, position: Double }
+```
+
+---
+
+## 七、序列化/反序列化
+
+### 7.1 JSON 序列化
+
+```moonbit
+// 使用 MoonBit 内置 JSON 支持
+fn document_to_json(doc: Document) -> String {
+  // MoonBit JSON 序列化
+  Json::encode(doc)
+}
+
+fn document_from_json(json: String) -> Result[Document, String] {
+  Json::decode(json)
+}
+```
+
+### 7.2 文件读写
+
+```moonbit
+fn save_document(doc: Document, path: String) -> Result[Unit, String] {
+  let json = document_to_json(doc)
+  // FFI 调用文件写入
+  write_file(path, json)
+}
+
+fn load_document(path: String) -> Result[Document, String] {
+  match read_file(path) {
+    Ok(json) => document_from_json(json)
+    Err(e) => Err("Failed to read file: \{e}")
+  }
+}
+```
+
+---
+
+## 八、版本兼容性策略
+
+| 版本 | 说明 |
+|------|------|
+| `1.0.0` | MVP 初始版本 |
+| `1.1.0` | 新增字段，向后兼容 |
+| `2.0.0` | 破坏性变更，需要迁移工具 |
+
+**兼容性检查**：
+```moonbit
+fn check_version(doc: Document) -> Result[Unit, String] {
+  let supported = ["1.0.0", "1.1.0"]
+  if supported.contains(doc.version) {
+    Ok(())
+  } else {
+    Err("Unsupported version: \{doc.version}")
+  }
+}
+```
+
+---
+
+## 九、与主文档的关系
+
+本文档是 `enimate-development-plan.mdc` 中 **阶段六：导出与持久化** 的详细设计。
+
+在实现时：
+1. 先定义 MoonBit 数据结构（本节第六部分）
+2. 实现 JSON 序列化/反序列化
+3. 实现文件读写 API
+4. 集成到 UI（新建/打开/保存）
+
+---
+
+## 十、未来扩展预留
+
+| 功能 | 预留字段 | 说明 |
+|------|----------|------|
+| 音频 | `AudioResource` | 资源类型预留 |
+| 脚本 | `scripts: Script[]` | 文档根预留 |
+| 动画预设 | `presets: AnimationPreset[]` | 元件扩展 |
+| 协作 | `meta.collaborators` | 元数据扩展 |
