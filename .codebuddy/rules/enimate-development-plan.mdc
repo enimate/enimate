@@ -1,6 +1,9 @@
-# Enimate 开发计划与软件设计大纲
+# Enimate MVP 开发计划与软件设计大纲
 
 > 本文档为 AI 编程工具 (Codebuddy) 提供项目开发指导。
+>
+> **注意**：本文档为 **MVP 版本**，使用 Skia CPU 直接封装，快速验证核心功能。
+> 渲染抽象层设计见：[enimate-ral-design.mdc](./enimate-ral-design.mdc)
 
 ## 项目概述
 
@@ -20,20 +23,21 @@
 - 配置 depot_tools
 - 同步第三方依赖
 
-#### 0.2 Skia 编译配置
+#### 0.2 Skia 编译配置（CPU 后端）
 - 配置编译参数（静态库、优化级别、平台适配）
+- **MVP 使用 CPU 光栅化**，避免 Vulkan 复杂性
 - 启用必要模块：
   - `skia_use_system_libpng = true`
   - `skia_use_system_zlib = true`
-  - `skia_enable_gpu = true`（Vulkan 后端支持）
-  - `skia_use_vulkan = true`
+  - `skia_enable_gpu = false`（MVP 使用 CPU）
+  - `skia_use_vulkan = false`
 - 生成 Ninja 构建文件
 - 编译 Skia 静态库
 
 #### 0.3 Skia 集成验证
 - 创建最小化测试程序验证 Skia 渲染
-- 验证 Vulkan 后端初始化
-- 验证基本图形绘制（矩形、圆形、路径）
+- 验证 CPU 光栅化基本图形绘制（矩形、圆形、路径）
+- 验证 PNG 导出功能
 
 ---
 
@@ -44,23 +48,25 @@
 - 配置项目结构（moon.mod.json）
 - 配置 C/C++ 源码目录结构
 
-#### 1.2 渲染抽象层（RAL）设计
-- 定义渲染后端接口（IRenderBackend）
-- 定义图形原语抽象（Shape, Path, Image）
-- 定义画布抽象（Canvas, Surface）
-- 实现渲染资源管理接口
+#### 1.2 Skia FFI 绑定（简化版）
+- 直接封装 Skia C API，MVP 阶段不做抽象层
+- 实现 `SkiaCanvas` 基本绘制功能
+- 实现 `SkiaPath` 路径构建
+- FFI 绑定：MoonBit ↔ C Bridge ↔ Skia C API
+- **后端抽象层延后**：等需要切换后端时再设计
 
-#### 1.3 Skia 后端实现
-- 实现 `SkiaBackend : IRenderBackend`
-- 实现 `SkiaCanvas : Canvas`
-- 实现 `SkiaPath : Path`
-- FFI 绑定层：MoonBit ↔ C Bridge ↔ Skia C API
+#### 1.3 窗口与显示
+- GLFW 窗口管理（创建窗口、事件循环）
+- **使用 OpenGL 显示 Skia 渲染结果**：
+  - Skia 渲染到 CPU 位图
+  - 通过 OpenGL 纹理上传显示
+- 或者：使用 GLFW 的软件渲染回调（更简单）
+- 窗口事件处理（鼠标、键盘）
 
-#### 1.4 窗口系统集成
-- GLFW 窗口管理
-- Vulkan Surface 创建
-- Skia Vulkan 上下文初始化
-- 交换链管理
+#### 1.4 基础绘图验证
+- 验证窗口创建与显示
+- 验证矩形、椭圆、线条绘制
+- 验证颜色填充与描边
 
 ---
 
@@ -165,27 +171,22 @@ type Tool =
 
 ---
 
-### 阶段五：渲染中间层完善
+### 阶段五：图层渲染与合成
 
-#### 5.1 渲染命令队列
-- 设计渲染命令抽象
-- 命令录制与提交
-- 批量渲染优化
-
-#### 5.2 图层合成
+#### 5.1 图层合成
 - 图层可见性裁剪
 - 透明度混合
 - 图层顺序排序渲染
+- **直接渲染**：MVP 不需要命令队列
 
-#### 5.3 洋葱皮渲染
-- 多帧合成渲染
+#### 5.2 洋葱皮渲染
+- 渲染前后 N 帧（半透明叠加）
 - Alpha 混合控制
-- 渲染缓存优化
+- 可配置洋葱皮范围
 
-#### 5.4 后端扩展预留
-- 接口设计预留扩展点（不实现其他后端）
-- 配置文件支持（为未来后端选择预留）
-- 后端能力查询接口
+#### 5.3 后端扩展预留（文档级）
+- 在代码注释中预留扩展点
+- 暂不实现抽象层，保持简单
 
 ---
 
@@ -247,23 +248,15 @@ type Tool =
 │  │ Document │ │  Layer   │ │  Frame   │ │       Shape          ││
 │  └──────────┘ └──────────┘ └──────────┘ └──────────────────────┘│
 ├─────────────────────────────────────────────────────────────────┤
-│                      渲染抽象层 (Render Abstraction Layer)         │
+│                      渲染层 (Rendering Layer)                     │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │                    IRenderBackend                        │   │
-│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐ │   │
-│  │  │ ICanvas     │ │ IPath       │ │ IImage/IText        │ │   │
-│  │  └─────────────┘ └─────────────┘ └─────────────────────┘ │   │
+│  │  SkiaCanvas / SkiaPath (直接封装，无抽象层)               │   │
+│  │  注：抽象层延后，等需要切换后端时再设计                      │   │
 │  └──────────────────────────────────────────────────────────┘   │
-├─────────────────────────────────────────────────────────────────┤
-│                        后端实现 (Backend Implementations)          │
-│  ┌──────────────────────────────────────────────────────────────┐ │
-│  │                      SkiaBackend (唯一实现)                   │ │
-│  │  注：其他后端（Vulkan/DX12）仅预留接口设计，未来按需实现        │ │
-│  └──────────────────────────────────────────────────────────────┘ │
 ├─────────────────────────────────────────────────────────────────┤
 │                        平台层 (Platform Layer)                    │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │  GLFW (窗口) │ Vulkan (GPU) │ 系统库 (FFI)               │   │
+│  │  GLFW (窗口) │ OpenGL (显示) │ 系统库 (FFI)               │   │
 │  └──────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -272,63 +265,46 @@ type Tool =
 
 ### 核心模块详细设计
 
-#### 1. 渲染抽象层 (RAL)
+#### 1. Skia 渲染层（直接封装，无抽象）
 
-##### 1.1 后端接口定义
+> **MVP 简化策略**：不设计抽象层，直接封装 Skia API。等未来需要切换后端时再抽象。
+
+##### 1.1 SkiaCanvas 封装
 ```moonbit
-// 渲染后端接口
-trait IRenderBackend {
-  // 初始化
-  fn initialize(config: BackendConfig) -> Result[Unit, String]
-  fn shutdown() -> Unit
-  
-  // 画布管理
-  fn create_canvas(width: Int, height: Int) -> Result[Canvas, String]
-  fn destroy_canvas(canvas: Canvas) -> Unit
-  
-  // 资源管理
-  fn create_image(data: ByteArray, width: Int, height: Int) -> Result[Image, String]
-  fn destroy_image(image: Image) -> Unit
-  
-  // 渲染
-  fn begin_frame(canvas: Canvas) -> Unit
-  fn end_frame(canvas: Canvas) -> Unit
-  fn present(canvas: Canvas) -> Unit
-  
-  // 能力查询
-  fn get_capabilities() -> BackendCapabilities
+// 直接封装，不使用 trait
+type SkiaCanvas {
+  priv raw: RawSkiaCanvas
+  width: Int
+  height: Int
 }
 
-type BackendCapabilities = {
-  gpu_accelerated: Bool,
-  max_texture_size: Int,
-  supported_formats: Array[String],
-}
+// 基本绘制方法
+fn SkiaCanvas::create(width: Int, height: Int) -> Result[SkiaCanvas, String]
+fn SkiaCanvas::destroy(self: SkiaCanvas) -> Unit
+fn SkiaCanvas::clear(self: SkiaCanvas, color: Color) -> Unit
+fn SkiaCanvas::draw_rect(self: SkiaCanvas, rect: Rect, paint: Paint) -> Unit
+fn SkiaCanvas::draw_ellipse(self: SkiaCanvas, cx: Double, cy: Double, rx: Double, ry: Double, paint: Paint) -> Unit
+fn SkiaCanvas::draw_line(self: SkiaCanvas, x1: Double, y1: Double, x2: Double, y2: Double, paint: Paint) -> Unit
+fn SkiaCanvas::draw_path(self: SkiaCanvas, path: SkiaPath, paint: Paint) -> Unit
+fn SkiaCanvas::save_to_png(self: SkiaCanvas, filepath: String) -> Result[Unit, String]
 ```
 
-##### 1.2 画布接口
+##### 1.2 SkiaPath 封装
 ```moonbit
-trait ICanvas {
-  // 变换
-  fn save() -> Unit
-  fn restore() -> Unit
-  fn translate(dx: Double, dy: Double) -> Unit
-  fn scale(sx: Double, sy: Double) -> Unit
-  fn rotate(angle: Double) -> Unit
-  fn set_matrix(matrix: Matrix) -> Unit
-  
-  // 绘制
-  fn clear(color: Color) -> Unit
-  fn draw_path(path: Path, paint: Paint) -> Unit
-  fn draw_rect(rect: Rect, paint: Paint) -> Unit
-  fn draw_circle(center: Point, radius: Double, paint: Paint) -> Unit
-  fn draw_image(image: Image, dst: Rect, src: Option[Rect]) -> Unit
-  
-  // 裁剪
-  fn clip_rect(rect: Rect) -> Unit
-  fn clip_path(path: Path) -> Unit
+type SkiaPath {
+  priv raw: RawSkiaPath
 }
 
+fn SkiaPath::create() -> SkiaPath
+fn SkiaPath::destroy(self: SkiaPath) -> Unit
+fn SkiaPath::move_to(self: SkiaPath, x: Double, y: Double) -> Unit
+fn SkiaPath::line_to(self: SkiaPath, x: Double, y: Double) -> Unit
+fn SkiaPath::quad_to(self: SkiaPath, cx: Double, cy: Double, x: Double, y: Double) -> Unit
+fn SkiaPath::close(self: SkiaPath) -> Unit
+```
+
+##### 1.3 Paint 样式
+```moonbit
 type Paint = {
   color: Color,
   style: PaintStyle,
@@ -339,54 +315,25 @@ type Paint = {
 type PaintStyle =
   | Fill
   | Stroke
-  | FillAndStroke
-```
-
-##### 1.3 路径接口
-```moonbit
-trait IPath {
-  fn move_to(x: Double, y: Double) -> Unit
-  fn line_to(x: Double, y: Double) -> Unit
-  fn quad_to(cx: Double, cy: Double, x: Double, y: Double) -> Unit
-  fn cubic_to(c1x: Double, c1y: Double, c2x: Double, c2y: Double, x: Double, y: Double) -> Unit
-  fn close() -> Unit
-  fn reset() -> Unit
-}
-```
-
-##### 1.4 后端工厂
-```moonbit
-// 当前只实现 Skia 后端，其他后端仅预留类型定义
-fn create_backend() -> IRenderBackend {
-  SkiaBackend::new()
-}
-
-// 预留后端类型，未来扩展时使用
-type BackendType =
-  | Skia    // 当前唯一实现
-  // 未来扩展（暂不实现）:
-  // | Vulkan
-  // | DX12
 ```
 
 ---
 
-#### 2. Skia 后端实现
+#### 2. Skia FFI 桥接
 
-##### 2.1 架构
+##### 2.1 架构（简化版）
 ```
 MoonBit Application
         │
         ▼
 ┌───────────────────┐
-│   SkiaBackend     │  (MoonBit)
-│   implements      │
-│   IRenderBackend  │
+│   SkiaCanvas      │  (MoonBit 直接封装)
+│   SkiaPath        │
 └─────────┬─────────┘
           │ FFI
           ▼
 ┌───────────────────┐
-│   skia_bridge.c   │  (C Bridge Layer)
+│   skia_bridge.cpp │  (C Bridge Layer)
 │   类型转换        │
 │   生命周期管理     │
 └─────────┬─────────┘
@@ -401,6 +348,7 @@ MoonBit Application
 ┌───────────────────┐
 │   Skia Library    │
 │   (libskia.a)     │
+│   CPU 光栅化       │
 └───────────────────┘
 ```
 
@@ -443,27 +391,23 @@ extern "c" fn skia_canvas_create(width: Int, height: Int) -> RawSkiaCanvas
 extern "c" fn skia_canvas_destroy(canvas: RawSkiaCanvas) -> Unit
 extern "c" fn skia_canvas_clear(canvas: RawSkiaCanvas, color: UInt32) -> Unit
 extern "c" fn skia_canvas_draw_rect(canvas: RawSkiaCanvas, x: Double, y: Double, w: Double, h: Double, color: UInt32, stroke_width: Double) -> Unit
-extern "c" fn skia_canvas_flush(canvas: RawSkiaCanvas) -> Unit
+extern "c" fn skia_canvas_save_png(canvas: RawSkiaCanvas, filepath: String) -> Int
+extern "c" fn skia_canvas_get_pixels(canvas: RawSkiaCanvas) -> RawPtr  // 用于显示
 
 type RawSkiaCanvas Int
 
-// 封装为 MoonBit 类型
-type SkiaCanvas {
-  priv raw: RawSkiaCanvas
-  width: Int
-  height: Int
+// 直接封装，无 trait
+fn SkiaCanvas::create(width: Int, height: Int) -> Result[SkiaCanvas, String] {
+  let raw = skia_canvas_create(width, height)
+  if raw == 0 {
+    Err("Failed to create canvas")
+  } else {
+    Ok({ raw, width, height })
+  }
 }
 
-impl ICanvas for SkiaCanvas with ICanvas {
-  fn clear(color: Color) -> Unit {
-    let color_value = color_to_u32(color)
-    skia_canvas_clear(self.raw, color_value)
-  }
-  
-  fn draw_rect(rect: Rect, paint: Paint) -> Unit {
-    let color_value = color_to_u32(paint.color)
-    skia_canvas_draw_rect(self.raw, rect.x, rect.y, rect.w, rect.h, color_value, paint.stroke_width)
-  }
+fn SkiaCanvas::clear(self: SkiaCanvas, color: Color) -> Unit {
+  skia_canvas_clear(self.raw, color_to_u32(color))
 }
 ```
 
@@ -490,7 +434,7 @@ cd skia
 python3 tools/git-sync-deps
 ```
 
-##### 3.3 编译配置 (gn args)
+##### 3.3 编译配置 (gn args) - CPU 后端
 ```
 # out/Release/args.gn
 is_official_build = true
@@ -500,19 +444,17 @@ is_component_build = false
 target_os = "linux"  # 或 "mac", "win"
 target_cpu = "x64"
 
-# GPU 支持
-skia_enable_gpu = true
-skia_use_vulkan = true
+# GPU 支持 - MVP 使用 CPU 光栅化
+skia_enable_gpu = false
+skia_use_vulkan = false
 skia_use_gl = false
 
 # 图像格式支持
 skia_use_system_libpng = true
 skia_use_system_zlib = true
-skia_use_system_libjpeg_turbo = true
 
-# 字体支持
-skia_enable_font_manager = true
-skia_use_system_freetype2 = true
+# 字体支持 - MVP 暂不需要
+skia_enable_font_manager = false
 
 # 优化
 is_debug = false
@@ -662,11 +604,14 @@ type BlendMode =
 
 | 库名称 | 用途 | 绑定方式 | 文件 |
 |--------|------|----------|------|
-| Skia | 2D 图形渲染 + PNG 编码 | C Bridge | libskia.a |
-| GLFW | 窗口管理 | FFI 直接 | libglfw.so |
+| Skia (CPU) | 2D 图形渲染 + PNG 编码 | C Bridge | libskia.a |
+| GLFW | 窗口管理 + OpenGL 上下文 | FFI 直接 | libglfw.so |
 | Dear ImGui | UI 组件 | C Bridge | imgui/*.cpp |
 
-> **注**：Skia 内置 `SkPngEncoder`，无需额外引入 giflib 或 stb_image_write。遵循"如无必要，勿增实体"原则。
+> **MVP 技术选择**：
+> - Skia 使用 **CPU 光栅化**，避免 Vulkan 复杂性
+> - GLFW + OpenGL 用于窗口显示
+> - 未来可升级到 GPU 后端（Vulkan/Metal）
 
 #### 绑定原则
 
@@ -734,14 +679,10 @@ enimate/
 │   │   ├── layer.mbt
 │   │   ├── frame.mbt
 │   │   └── shape.mbt
-│   ├── render/                # 渲染抽象层
-│   │   ├── backend.mbt        # 后端接口
-│   │   ├── canvas.mbt         # 画布抽象
-│   │   ├── path.mbt           # 路径抽象
-│   │   └── skia/              # Skia 实现
-│   │       ├── skia_backend.mbt
-│   │       ├── skia_canvas.mbt
-│   │       └── skia_ffi.mbt
+│   ├── render/                # 渲染层
+│   │   ├── skia_canvas.mbt    # Skia Canvas 封装
+│   │   ├── skia_path.mbt      # Skia Path 封装
+│   │   └── skia_ffi.mbt       # FFI 绑定
 │   ├── tools/                 # 工具系统
 │   │   ├── tool.mbt           # 工具基类
 │   │   ├── select.mbt
@@ -783,7 +724,15 @@ enimate/
 
 ## 备注
 
-- 本文档应作为 AI 编程工具的主要参考
+- 本文档为 **MVP 开发计划**，目标是快速验证核心功能
 - 开发过程中根据实际情况调整优先级
 - 遇到技术难点可回退到更简单的实现方案
-- 保持代码质量，即使 MVP 阶段也要有良好的架构设计
+- **升级路径**：MVP 验证成功后，按 [enimate-ral-design.mdc](./enimate-ral-design.mdc) 引入渲染抽象层
+
+## 文档索引
+
+| 文档 | 说明 |
+|------|------|
+| [enimate-development-plan.mdc](./enimate-development-plan.mdc) | MVP 开发计划（本文档） |
+| [enimate-project-format.mdc](./enimate-project-format.mdc) | 工程文件格式设计 |
+| [enimate-ral-design.mdc](./enimate-ral-design.mdc) | 渲染抽象层设计（MVP 后升级） |

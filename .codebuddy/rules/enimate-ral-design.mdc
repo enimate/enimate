@@ -1,0 +1,600 @@
+# Enimate 渲染抽象层 (RAL) 设计与开发计划
+
+> 本文档定义渲染抽象层的完整设计，作为 MVP 后的升级计划。
+
+## 一、设计目标
+
+| 目标 | 说明 |
+|------|------|
+| 后端无关 | 业务代码不依赖特定渲染 API |
+| 可切换后端 | 支持 Skia (CPU/GPU)、Vulkan、DirectX12、Metal |
+| 最小化 FFI | 统一接口，减少 MoonBit ↔ C 的边界 |
+| 渐进式升级 | 从 MVP 的直接封装平滑过渡 |
+
+---
+
+## 二、架构设计
+
+### 2.1 分层架构
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        应用层 (Application)                       │
+│  工具系统 │ 时间轴 │ 图层管理 │ 导出/持久化                        │
+├─────────────────────────────────────────────────────────────────┤
+│                        文档模型 (Document Model)                  │
+│  Document │ Layer │ Frame │ Shape                                │
+├─────────────────────────────────────────────────────────────────┤
+│                   渲染抽象层 (Render Abstraction Layer)           │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                    IRenderBackend                         │  │
+│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐ │  │
+│  │  │ ICanvas     │ │ IPath       │ │ IImage              │ │  │
+│  │  └─────────────┘ └─────────────┘ └─────────────────────┘ │  │
+│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐ │  │
+│  │  │ ISurface    │ │ IContext    │ │ IPaint              │ │  │
+│  │  └─────────────┘ └─────────────┘ └─────────────────────┘ │  │
+│  └───────────────────────────────────────────────────────────┘  │
+├─────────────────────────────────────────────────────────────────┤
+│                   后端实现 (Backend Implementations)              │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐            │
+│  │ SkiaBackend  │ │ VulkanBackend│ │ DX12Backend  │ (未来)     │
+│  │ (CPU/GPU)    │ │              │ │              │            │
+│  └──────────────┘ └──────────────┘ └──────────────┘            │
+├─────────────────────────────────────────────────────────────────┤
+│                        平台层 (Platform Layer)                    │
+│  GLFW │ Vulkan │ Metal │ DirectX │ 系统库 (FFI)                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 2.2 核心接口关系
+
+```
+IRenderBackend
+    │
+    ├── create_surface() → ISurface        // 渲染目标
+    ├── create_canvas() → ICanvas          // 绘图画布
+    ├── create_context() → IContext        // GPU 上下文
+    │
+    └── get_capabilities() → Capabilities  // 能力查询
+
+ISurface
+    │
+    ├── get_canvas() → ICanvas             // 获取绘图表面
+    ├── present()                          // 呈现到屏幕
+    └── resize(width, height)              // 调整大小
+
+ICanvas
+    │
+    ├── 变换: save/restore/translate/scale/rotate
+    ├── 绘制: draw_path/draw_rect/draw_ellipse/draw_image
+    └── 裁剪: clip_rect/clip_path
+
+IPath
+    │
+    └── 构建: move_to/line_to/quad_to/cubic_to/close
+```
+
+---
+
+## 三、接口定义
+
+### 3.1 IRenderBackend - 渲染后端
+
+```moonbit
+/// 渲染后端接口 - 核心抽象
+trait IRenderBackend {
+  // ========== 生命周期 ==========
+  /// 初始化后端
+  fn initialize(self: IRenderBackend, config: BackendConfig) -> Result[Unit, String]
+  /// 关闭后端
+  fn shutdown(self: IRenderBackend) -> Unit
+  
+  // ========== Surface 管理 ==========
+  /// 创建窗口 Surface（用于屏幕显示）
+  fn create_window_surface(self: IRenderBackend, window: WindowHandle) -> Result[ISurface, String]
+  /// 创建离屏 Surface（用于导出）
+  fn create_offscreen_surface(self: IRenderBackend, width: Int, height: Int) -> Result[ISurface, String]
+  /// 销毁 Surface
+  fn destroy_surface(self: IRenderBackend, surface: ISurface) -> Unit
+  
+  // ========== 资源管理 ==========
+  /// 创建图像资源
+  fn create_image(self: IRenderBackend, data: ByteArray, width: Int, height: Int, format: ImageFormat) -> Result[IImage, String]
+  /// 销毁图像资源
+  fn destroy_image(self: IRenderBackend, image: IImage) -> Unit
+  
+  // ========== 能力查询 ==========
+  /// 获取后端能力
+  fn get_capabilities(self: IRenderBackend) -> BackendCapabilities
+  /// 获取后端名称
+  fn get_name(self: IRenderBackend) -> String
+}
+
+/// 后端配置
+type BackendConfig = {
+  /// 是否启用 GPU 加速
+  use_gpu: Bool,
+  /// 是否启用 VSync
+  vsync: Bool,
+  /// GPU 设备选择（多 GPU 时）
+  device_index: Option[Int],
+  /// 调试模式
+  debug: Bool,
+}
+
+/// 后端能力
+type BackendCapabilities = {
+  /// 是否支持 GPU 加速
+  gpu_accelerated: Bool,
+  /// 最大纹理尺寸
+  max_texture_size: Int,
+  /// 支持的图像格式
+  supported_formats: Array[ImageFormat],
+  /// 支持的混合模式
+  supported_blend_modes: Array[BlendMode],
+  /// 是否支持离屏渲染
+  offscreen_rendering: Bool,
+}
+
+/// 图像格式
+type ImageFormat = RGBA8888 | BGRA8888 | RGB888 | A8
+
+/// 窗口句柄（平台相关）
+type WindowHandle Int
+```
+
+### 3.2 ISurface - 渲染目标
+
+```moonbit
+/// Surface - 渲染目标抽象
+trait ISurface {
+  // ========== 画布访问 ==========
+  /// 获取绘图 Canvas
+  fn get_canvas(self: ISurface) -> ICanvas
+  /// 获取尺寸
+  fn get_size(self: ISurface) -> (Int, Int)
+  
+  // ========== 呈现 ==========
+  /// 呈现到屏幕（仅窗口 Surface）
+  fn present(self: ISurface) -> Unit
+  
+  // ========== 导出 ==========
+  /// 读取像素数据（用于导出）
+  fn read_pixels(self: ISurface) -> ByteArray
+  /// 保存为 PNG
+  fn save_to_png(self: ISurface, filepath: String) -> Result[Unit, String]
+  
+  // ========== 生命周期 ==========
+  /// 调整大小
+  fn resize(self: ISurface, width: Int, height: Int) -> Unit
+}
+```
+
+### 3.3 ICanvas - 绘图画布
+
+```moonbit
+/// Canvas - 绘图画布抽象
+trait ICanvas {
+  // ========== 变换 ==========
+  /// 保存当前状态
+  fn save(self: ICanvas) -> Unit
+  /// 恢复上一状态
+  fn restore(self: ICanvas) -> Unit
+  /// 平移
+  fn translate(self: ICanvas, dx: Double, dy: Double) -> Unit
+  /// 缩放
+  fn scale(self: ICanvas, sx: Double, sy: Double) -> Unit
+  /// 旋转（弧度）
+  fn rotate(self: ICanvas, angle: Double) -> Unit
+  /// 设置变换矩阵
+  fn set_transform(self: ICanvas, transform: Transform) -> Unit
+  /// 获取当前变换
+  fn get_transform(self: ICanvas) -> Transform
+  
+  // ========== 绘制 - 基础图形 ==========
+  /// 清除画布
+  fn clear(self: ICanvas, color: Color) -> Unit
+  /// 绘制矩形
+  fn draw_rect(self: ICanvas, rect: Rect, paint: Paint) -> Unit
+  /// 绘制椭圆
+  fn draw_ellipse(self: ICanvas, cx: Double, cy: Double, rx: Double, ry: Double, paint: Paint) -> Unit
+  /// 绘制线条
+  fn draw_line(self: ICanvas, x1: Double, y1: Double, x2: Double, y2: Double, paint: Paint) -> Unit
+  /// 绘制路径
+  fn draw_path(self: ICanvas, path: IPath, paint: Paint) -> Unit
+  
+  // ========== 绘制 - 图像 ==========
+  /// 绘制图像
+  fn draw_image(self: ICanvas, image: IImage, dst: Rect, src: Option[Rect]) -> Unit
+  
+  // ========== 绘制 - 文本 (P1) ==========
+  /// 绘制文本
+  fn draw_text(self: ICanvas, text: String, x: Double, y: Double, paint: Paint, font: Font) -> Unit
+  
+  // ========== 裁剪 ==========
+  /// 矩形裁剪
+  fn clip_rect(self: ICanvas, rect: Rect) -> Unit
+  /// 路径裁剪
+  fn clip_path(self: ICanvas, path: IPath) -> Unit
+  /// 重置裁剪
+  fn reset_clip(self: ICanvas) -> Unit
+  
+  // ========== 图层 ==========
+  /// 保存图层（用于透明度/混合）
+  fn save_layer(self: ICanvas, bounds: Option[Rect], paint: Option[Paint]) -> Unit
+  /// 恢复图层
+  fn restore_layer(self: ICanvas) -> Unit
+}
+
+/// 变换矩阵
+type Transform = {
+  a: Double,  // scaleX
+  b: Double,  // skewY
+  c: Double,  // skewX
+  d: Double,  // scaleY
+  e: Double,  // translateX
+  f: Double,  // translateY
+}
+
+/// 矩形
+type Rect = {
+  x: Double,
+  y: Double,
+  width: Double,
+  height: Double,
+}
+
+/// 颜色 (RGBA)
+type Color = {
+  r: Double,
+  g: Double,
+  b: Double,
+  a: Double,
+}
+```
+
+### 3.4 IPath - 路径
+
+```moonbit
+/// Path - 路径抽象
+trait IPath {
+  // ========== 构建路径 ==========
+  /// 移动到
+  fn move_to(self: IPath, x: Double, y: Double) -> Unit
+  /// 直线到
+  fn line_to(self: IPath, x: Double, y: Double) -> Unit
+  /// 二次贝塞尔曲线
+  fn quad_to(self: IPath, cx: Double, cy: Double, x: Double, y: Double) -> Unit
+  /// 三次贝塞尔曲线
+  fn cubic_to(self: IPath, c1x: Double, c1y: Double, c2x: Double, c2y: Double, x: Double, y: Double) -> Unit
+  /// 弧线
+  fn arc_to(self: IPath, rx: Double, ry: Double, rotation: Double, large_arc: Bool, sweep: Bool, x: Double, y: Double) -> Unit
+  /// 闭合路径
+  fn close(self: IPath) -> Unit
+  
+  // ========== 操作 ==========
+  /// 重置路径
+  fn reset(self: IPath) -> Unit
+  /// 添加矩形
+  fn add_rect(self: IPath, rect: Rect) -> Unit
+  /// 添加椭圆
+  fn add_ellipse(self: IPath, cx: Double, cy: Double, rx: Double, ry: Double) -> Unit
+  /// 添加圆角矩形
+  fn add_round_rect(self: IPath, rect: Rect, radii: (Double, Double, Double, Double)) -> Unit
+  /// 从 SVG 路径字符串解析
+  fn parse_svg(self: IPath, d: String) -> Result[Unit, String]
+}
+```
+
+### 3.5 Paint - 样式
+
+```moonbit
+/// Paint - 绘制样式
+type Paint = {
+  /// 填充或描边
+  style: PaintStyle,
+  /// 颜色（如果是纯色）
+  color: Color,
+  /// 填充（如果非纯色）
+  fill: Option[Fill],
+  /// 描边宽度
+  stroke_width: Double,
+  /// 描边端点
+  stroke_cap: StrokeCap,
+  /// 描边连接
+  stroke_join: StrokeJoin,
+  /// 透明度
+  opacity: Double,
+  /// 混合模式
+  blend_mode: BlendMode,
+  /// 抗锯齿
+  antialias: Bool,
+}
+
+type PaintStyle = Fill | Stroke | FillAndStroke
+
+type StrokeCap = Butt | Round | Square
+
+type StrokeJoin = Miter | Round | Bevel
+
+/// 填充类型
+type Fill =
+  | SolidFill(Color)
+  | LinearGradientFill(LinearGradient)
+  | RadialGradientFill(RadialGradient)
+  | ImageFill(ImageFill)
+
+type LinearGradient = {
+  start: (Double, Double),
+  end: (Double, Double),
+  stops: Array[GradientStop],
+}
+
+type RadialGradient = {
+  center: (Double, Double),
+  radius: Double,
+  stops: Array[GradientStop],
+}
+
+type GradientStop = {
+  position: Double,
+  color: Color,
+}
+
+type ImageFill = {
+  image: IImage,
+  mode: ImageFillMode,
+}
+
+type ImageFillMode = Stretch | Fill | Fit | Tile
+
+/// 混合模式
+type BlendMode =
+  | Normal
+  | Multiply
+  | Screen
+  | Overlay
+  | Darken
+  | Lighten
+  | ColorDodge
+  | ColorBurn
+  | HardLight
+  | SoftLight
+  | Difference
+  | Exclusion
+```
+
+### 3.6 IImage - 图像资源
+
+```moonbit
+/// Image - 图像资源抽象
+trait IImage {
+  /// 获取尺寸
+  fn get_size(self: IImage) -> (Int, Int)
+  /// 获取格式
+  fn get_format(self: IImage) -> ImageFormat
+}
+```
+
+---
+
+## 四、后端实现规范
+
+### 4.1 SkiaBackend
+
+```moonbit
+/// Skia 后端实现
+type SkiaBackend {
+  priv context: Option[SkiaContext],
+  priv gpu_enabled: Bool,
+  priv debug: Bool,
+}
+
+impl IRenderBackend for SkiaBackend {
+  fn initialize(self: SkiaBackend, config: BackendConfig) -> Result[Unit, String] {
+    if config.use_gpu {
+      // 初始化 Skia GPU 上下文 (Vulkan/OpenGL/Metal)
+      self.context = SkiaContext::create_gpu(config.device_index)
+    } else {
+      // 初始化 CPU 光栅化
+      self.context = SkiaContext::create_cpu()
+    }
+    Ok(())
+  }
+  
+  fn get_name(self: SkiaBackend) -> String {
+    if self.gpu_enabled { "Skia (GPU)" } else { "Skia (CPU)" }
+  }
+  
+  // ... 其他方法
+}
+```
+
+### 4.2 VulkanBackend (未来)
+
+```moonbit
+/// Vulkan 后端实现（未来）
+type VulkanBackend {
+  priv instance: VkInstance,
+  priv device: VkDevice,
+  priv queue: VkQueue,
+}
+
+impl IRenderBackend for VulkanBackend {
+  // 直接使用 Vulkan API 实现
+  fn initialize(self: VulkanBackend, config: BackendConfig) -> Result[Unit, String] {
+    // 创建 Vulkan Instance
+    // 选择物理设备
+    // 创建逻辑设备和队列
+    // ...
+  }
+}
+```
+
+---
+
+## 五、后端工厂
+
+```moonbit
+/// 后端类型
+type BackendType =
+  | SkiaCPU        // Skia CPU 光栅化
+  | SkiaGPU        // Skia GPU (Vulkan/OpenGL/Metal)
+  | Vulkan         // 原生 Vulkan（未来）
+  | DirectX12      // DirectX 12（未来，Windows）
+  | Metal          // Metal（未来，macOS/iOS）
+
+/// 后端工厂
+fn create_backend(backend_type: BackendType) -> Result[IRenderBackend, String] {
+  match backend_type {
+    SkiaCPU => Ok(SkiaBackend::create_cpu())
+    SkiaGPU => Ok(SkiaBackend::create_gpu())
+    Vulkan => Err("Vulkan backend not implemented yet")
+    DirectX12 => Err("DirectX12 backend not implemented yet")
+    Metal => Err("Metal backend not implemented yet")
+  }
+}
+
+/// 自动选择最佳后端
+fn auto_select_backend() -> BackendType {
+  // 优先级: SkiaGPU > SkiaCPU
+  if has_gpu_available() {
+    SkiaGPU
+  } else {
+    SkiaCPU
+  }
+}
+```
+
+---
+
+## 六、开发计划
+
+### 阶段 R1：接口设计与实现（1-2 周）
+
+#### R1.1 接口定义
+- 定义 `IRenderBackend` trait
+- 定义 `ISurface` trait
+- 定义 `ICanvas` trait
+- 定义 `IPath` trait
+- 定义辅助类型（Paint, Color, Rect, Transform）
+
+#### R1.2 SkiaBackend 实现
+- 重构现有 SkiaCanvas 为 `SkiaBackend`
+- 实现 `IRenderBackend` trait
+- 实现 `ISurface`（SkiaSurface）
+- 实现 `ICanvas`（SkiaCanvas）
+- 实现 `IPath`（SkiaPath）
+
+#### R1.3 后端工厂
+- 实现 `create_backend()` 工厂函数
+- 实现 `auto_select_backend()` 自动选择
+
+### 阶段 R2：业务层迁移（1 周）
+
+#### R2.1 业务代码适配
+- 修改绘图工具使用 `ICanvas` 接口
+- 修改图层渲染使用 `ISurface` 接口
+- 修改导出功能使用后端无关 API
+
+#### R2.2 测试验证
+- 验证 SkiaCPU 后端功能正常
+- 验证 SkiaGPU 后端功能正常
+- 性能对比测试
+
+### 阶段 R3：GPU 后端集成（1-2 周）
+
+#### R3.1 Skia GPU 集成
+- 编译 Skia with Vulkan/Metal/OpenGL
+- 实现 Skia GPU 上下文初始化
+- 实现窗口 Surface（Vulkan/Metal）
+- 验证 GPU 渲染
+
+#### R3.2 性能优化
+- GPU 资源缓存
+- 批量渲染优化
+- 异步渲染
+
+### 阶段 R4：原生 Vulkan 后端（未来，可选）
+
+#### R4.1 Vulkan 后端实现
+- 实现 `VulkanBackend`
+- 实现命令缓冲区管理
+- 实现渲染管线
+
+#### R4.2 平台扩展
+- DirectX12 后端（Windows）
+- Metal 后端（macOS/iOS）
+
+---
+
+## 七、迁移指南
+
+### 7.1 从 MVP 直接封装迁移到 RAL
+
+**MVP 代码（直接封装）**：
+```moonbit
+// 直接使用 SkiaCanvas
+let canvas = SkiaCanvas::create(800, 600)
+canvas.draw_rect(rect, paint)
+```
+
+**RAL 代码（抽象接口）**：
+```moonbit
+// 通过后端创建
+let backend = create_backend(SkiaCPU)?
+let surface = backend.create_offscreen_surface(800, 600)?
+let canvas = surface.get_canvas()
+canvas.draw_rect(rect, paint)
+```
+
+### 7.2 迁移步骤
+
+1. **定义接口**：创建 `render/backend.mbt` 定义所有 trait
+2. **实现适配器**：将现有 SkiaCanvas 改为实现 `ICanvas` trait
+3. **更新业务代码**：将直接调用改为通过接口调用
+4. **添加工厂**：实现后端创建逻辑
+
+---
+
+## 八、与 MVP 开发计划的关系
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    MVP 开发计划                              │
+│  (enimate-development-plan.mdc)                             │
+│                                                             │
+│  使用 Skia CPU 直接封装，快速验证核心功能：                   │
+│  - 绘图工具                                                  │
+│  - 图层系统                                                  │
+│  - 时间轴                                                    │
+│  - PNG 导出                                                  │
+└─────────────────────────────────────────────────────────────┘
+                          │
+                          │ MVP 验证成功后
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    RAL 升级计划                              │
+│  (本文档)                                                    │
+│                                                             │
+│  引入渲染抽象层，支持：                                       │
+│  - 后端切换                                                  │
+│  - GPU 加速                                                  │
+│  - 跨平台优化                                                │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**触发条件**：
+- MVP 核心功能稳定
+- 需要性能优化（GPU 加速）
+- 需要跨平台支持（Windows DirectX / macOS Metal）
+
+---
+
+## 九、注意事项
+
+1. **渐进式迁移**：不要一次性重构所有代码，先定义接口，逐步迁移
+2. **保持兼容**：MVP 期间保持 Skia 直接封装可用，作为回退方案
+3. **性能优先**：抽象层不应引入显著性能开销
+4. **文档同步**：接口变更时同步更新本文档
