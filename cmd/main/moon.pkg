@@ -1,0 +1,7 @@
+// import {
+//   "laplaceliu/enimate" @lib,
+// }
+
+options(
+  "is-main": true,
+)
