@@ -5,3 +5,21 @@ _build/
 .codebuddy/
 
 CODEBUDDY.md
+
+# Dependencies and third-party tools
+_deps/
+
+# Build artifacts
+native/lib/
+native/include/skia/
+
+# Platform-specific
+*.lib
+*.dll
+*.exe
+*.so
+*.dylib
+*.a
+*.wasm
+
+

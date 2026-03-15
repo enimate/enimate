@@ -1,21 +1,25 @@
 #!/bin/bash
-# Build Skia with CPU-only backend for Enimate
-# This creates a static library for native compilation
+# Build Skia for Linux (CPU-only backend)
+# This creates a static library for Linux native compilation
+# Can be run in WSL2 on Windows
+# Dependencies are installed in the project directory
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-SKIA_DIR="$HOME/skia"
-DEPOT_TOOLS="$HOME/depot_tools"
+DEPS_DIR="$PROJECT_ROOT/_deps"
+SKIA_DIR="$DEPS_DIR/skia"
+DEPOT_TOOLS="$DEPS_DIR/depot_tools"
 
-echo "=== Skia Build Script (CPU Backend) ==="
+echo "=== Skia Build Script for Linux (CPU Backend) ==="
+echo "Skia source: $SKIA_DIR"
 echo ""
 
 # Check Skia exists
 if [ ! -d "$SKIA_DIR" ]; then
     echo "Error: Skia not found at $SKIA_DIR"
-    echo "Please run ./scripts/setup_deps.sh first"
+    echo "Please run ./scripts/setup_deps.sh first (in Linux/WSL2)"
     exit 1
 fi
 
@@ -31,7 +35,7 @@ fi
 cd "$SKIA_DIR"
 
 # Create build configuration
-BUILD_DIR="out/enimate_release"
+BUILD_DIR="out/enimate_linux_release"
 echo "[1/3] Configuring build ($BUILD_DIR)..."
 
 mkdir -p "$BUILD_DIR"
@@ -76,8 +80,8 @@ symbol_level = 1
 
 # Use C++17
 ar = "ar"
-cc = "gcc-11"
-cxx = "g++-11"
+cc = "gcc"
+cxx = "g++"
 
 # Disable AVX to avoid ABI issues with older GCC
 skia_enable_avx = false
@@ -107,11 +111,13 @@ echo "✓ Skia built successfully"
 echo ""
 echo "Copying Skia library to project..."
 mkdir -p "$PROJECT_ROOT/native/lib"
-cp "$BUILD_DIR/libskia.a" "$PROJECT_ROOT/native/lib/"
+cp "$BUILD_DIR/libskia.a" "$PROJECT_ROOT/native/lib/libskia.a"
 echo "✓ libskia.a copied to native/lib/"
 
 echo ""
 echo "=== Build Complete ==="
 echo ""
 echo "Skia static library: $PROJECT_ROOT/native/lib/libskia.a"
+echo "Source code location: $SKIA_DIR"
+echo "This library can be used for Linux x64 targets"
 echo ""
